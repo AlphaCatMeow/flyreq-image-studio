@@ -1,6 +1,6 @@
-import type { VideoModelConfig } from '@/lib/flyreq-models';
+import { getResolvedVideoModelId, type VideoModelConfig } from '@/lib/flyreq-models';
 
-export type VideoTaskStatus = 'queued' | '排队中' | 'processing' | 'completed' | 'failed' | 'expired';
+export type VideoTaskStatus = 'queued' | '排队中' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'expired';
 
 export interface VideoTaskResponse {
   id: string;
@@ -41,7 +41,7 @@ export async function createVideoTask(input: CreateVideoTaskInput): Promise<stri
   const formData = new FormData();
   formData.set('apiKey', input.model.apiKey);
   formData.set('baseUrl', input.model.baseUrl);
-  formData.set('model', input.model.modelId);
+  formData.set('model', getResolvedVideoModelId(input.model));
   formData.set('prompt', input.prompt);
   formData.set('resolution', String(input.resolution));
   formData.set('size', input.size);
@@ -74,4 +74,15 @@ export async function getVideoTask(taskId: string): Promise<VideoTaskResponse> {
  */
 export async function acknowledgeVideoTask(taskId: string): Promise<void> {
   await fetch(`/api/flyreq/video-tasks/${encodeURIComponent(taskId)}/ack`, { method: 'POST' });
+}
+
+/**
+ * 取消排队中或处理中的视频任务。
+ * @param taskId 后端视频任务标识。
+ * @returns 后端确认后的取消任务快照。
+ */
+export async function cancelVideoTask(taskId: string): Promise<VideoTaskResponse> {
+  const response = await fetch(`/api/flyreq/video-tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' });
+  if (!response.ok) return throwVideoTaskError(response);
+  return response.json() as Promise<VideoTaskResponse>;
 }

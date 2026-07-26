@@ -22,6 +22,7 @@ const TASK_STATUS = {
   PROCESSING: 'processing',
   COMPLETED: 'completed',
   FAILED: 'failed',
+  CANCELLED: 'cancelled',
 };
 const GLOBAL_TASK_CONCURRENCY = 50;
 const MAX_PARALLEL_COUNT = 20;
@@ -424,6 +425,7 @@ const IMAGE_DIR = process.env.FLYREQ_IMAGE_DIR || path.join(__dirname, 'flyreq-i
 const VIDEO_DIR = process.env.FLYREQ_VIDEO_DIR || path.join(__dirname, 'flyreq-videos');
 const taskRefImages = new Map();
 const taskVideoFiles = new Map();
+const videoTaskAbortControllers = new Map();
 
 const app = IS_DEV ? next({ dev: IS_DEV, hostname: HOSTNAME, port: PORT, dir: path.join(__dirname, '..', 'frontend') }) : null;
 const handle = app ? app.getRequestHandler() : null;
@@ -695,6 +697,7 @@ function cleanupTaskRuntimeState(taskId) {
   apiKeys.delete(taskId);
   taskRefImages.delete(taskId);
   taskVideoFiles.delete(taskId);
+  videoTaskAbortControllers.delete(taskId);
   taskSources.delete(taskId);
 }
 
@@ -944,9 +947,21 @@ function sendVideoFile(req, res, filePath) {
     return;
   }
   const match = range.match(/^bytes=(\d*)-(\d*)$/);
-  const start = match?.[1] ? Number(match[1]) : 0;
-  const end = match?.[2] ? Math.min(Number(match[2]), stat.size - 1) : stat.size - 1;
-  if (!match || start > end || start >= stat.size) {
+  let start;
+  let end;
+  if (match?.[1]) {
+    // 普通范围 bytes=start-end；省略 end 时读取到文件末尾。
+    start = Number(match[1]);
+    end = match[2] ? Math.min(Number(match[2]), stat.size - 1) : stat.size - 1;
+  } else if (match?.[2]) {
+    // 后缀范围 bytes=-length 表示读取文件末尾 length 字节。
+    const suffixLength = Number(match[2]);
+    if (Number.isSafeInteger(suffixLength) && suffixLength > 0) {
+      start = Math.max(0, stat.size - suffixLength);
+      end = stat.size - 1;
+    }
+  }
+  if (!match || start === undefined || end === undefined || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end || start >= stat.size) {
     res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
     res.end();
     return;
@@ -1388,7 +1403,7 @@ function readVideoMultipartBody(req) {
       limits: {
         fields: 20,
         files: config.maxRefVideos + config.maxRefAudios + config.maxRefImages,
-        fileSize: Math.max(config.maxReferenceVideoBytes, config.maxReferenceAudioBytes),
+        fileSize: Math.max(config.maxReferenceVideoBytes, config.maxReferenceAudioBytes, config.maxReferenceImageBytes),
       },
     });
     busboy.on('field', (name, value) => { fields[name] = value; });
@@ -1398,15 +1413,29 @@ function readVideoMultipartBody(req) {
       const maxBytes = name === 'reference_videos' ? config.maxReferenceVideoBytes : name === 'reference_audios' ? config.maxReferenceAudioBytes : config.maxReferenceImageBytes;
       const chunks = [];
       let size = 0;
+      let exceededLimit = false;
       if (!target || !String(info.mimeType || '').startsWith(expectedPrefix)) {
         failure ||= new Error('参考附件类型无效');
         stream.resume();
         return;
       }
-      stream.on('data', chunk => { size += chunk.length; chunks.push(chunk); });
-      stream.on('limit', () => { failure ||= createHttpError(413, 'PAYLOAD_TOO_LARGE', '参考附件超过大小限制'); });
+      stream.on('data', chunk => {
+        size += chunk.length;
+        if (size <= maxBytes) {
+          chunks.push(chunk);
+          return;
+        }
+        // 单类附件超过自身限制后不再缓存后续数据，避免较小限制的音频或图片按视频上限占满内存。
+        exceededLimit = true;
+        chunks.length = 0;
+        failure ||= createHttpError(413, 'PAYLOAD_TOO_LARGE', '参考附件超过大小限制');
+      });
+      stream.on('limit', () => {
+        exceededLimit = true;
+        failure ||= createHttpError(413, 'PAYLOAD_TOO_LARGE', '参考附件超过大小限制');
+      });
       stream.on('end', () => {
-        if (size <= maxBytes) target.push({ filename: info.filename, mimeType: info.mimeType, buffer: Buffer.concat(chunks), size });
+        if (!exceededLimit && size <= maxBytes) target.push({ filename: info.filename, mimeType: info.mimeType, buffer: Buffer.concat(chunks), size });
         else failure ||= createHttpError(413, 'PAYLOAD_TOO_LARGE', '参考附件超过大小限制');
       });
     });
@@ -2103,9 +2132,22 @@ try {
   console.warn('[network] undici Agent 配置失败，使用默认设置:', e?.message || e);
 }
 
-async function fetchWithTimeout(url, init) {
+/**
+ * 发起带统一超时和可选外部中止信号的上游请求。
+ * @param {string|URL} url 上游请求地址。
+ * @param {RequestInit} [init] Fetch 请求参数，可通过 signal 主动取消。
+ * @returns {Promise<Response>} 上游 HTTP 响应。
+ */
+async function fetchWithTimeout(url, init = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const externalSignal = init.signal;
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+  if (externalSignal?.aborted) {
+    abortFromExternal();
+  } else {
+    externalSignal?.addEventListener('abort', abortFromExternal, { once: true });
+  }
   try {
     return await fetch(url, {
       ...init,
@@ -2114,6 +2156,7 @@ async function fetchWithTimeout(url, init) {
     });
   } finally {
     clearTimeout(timeout);
+    externalSignal?.removeEventListener('abort', abortFromExternal);
   }
 }
 
@@ -2207,10 +2250,39 @@ function getMaxVideoConcurrency() {
 function registerVideoTaskRuntimeState(taskId, payload, files, source) {
   apiKeys.set(taskId, payload.apiKey);
   taskVideoFiles.set(taskId, files);
+  videoTaskAbortControllers.set(taskId, new AbortController());
   taskSources.set(taskId, source);
   if (source.ip) pendingCountByIp.set(source.ip, (pendingCountByIp.get(source.ip) || 0) + 1);
   if (source.apiKeyHash) pendingCountByApiKeyHash.set(source.apiKeyHash, (pendingCountByApiKeyHash.get(source.apiKeyHash) || 0) + 1);
   videoQueue.push(taskId);
+}
+
+/**
+ * 等待下一次视频轮询，并允许取消操作立即结束等待。
+ * @param {number} intervalMs 等待毫秒数。
+ * @param {AbortSignal} signal 视频任务中止信号。
+ * @returns {Promise<void>} 等待结束时完成；取消时以 AbortError 拒绝。
+ */
+function waitForVideoPoll(intervalMs, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(signal.reason || new DOMException('视频任务已取消', 'AbortError'));
+      return;
+    }
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', handleAbort);
+      resolve();
+    }, intervalMs);
+    /**
+     * 取消当前轮询等待并把中止原因传给任务执行器。
+     * @returns {void} 通过拒绝外层 Promise 结束等待。
+     */
+    function handleAbort() {
+      clearTimeout(timer);
+      reject(signal.reason || new DOMException('视频任务已取消', 'AbortError'));
+    }
+    signal.addEventListener('abort', handleAbort, { once: true });
+  });
 }
 
 /**
@@ -2243,9 +2315,10 @@ function createVideoTask(payload, files, req) {
  * @param apiKey 视频模型 API Key。
  * @param request 视频生成参数。
  * @param files 参考视频和参考音频附件。
+ * @param {AbortSignal} signal 视频任务中止信号。
  * @returns 上游视频任务标识。
  */
-async function createUpstreamVideo(apiKey, request, files) {
+async function createUpstreamVideo(apiKey, request, files, signal) {
   const baseUrl = resolveAndLogOutboundBaseUrl('视频生成', 'openai', request.baseUrl).baseUrl;
   const url = appendProtocolApiPath('openai', baseUrl, '/v1/videos/generations');
   const common = {
@@ -2267,7 +2340,7 @@ async function createUpstreamVideo(apiKey, request, files) {
     headers = { ...headers, 'Content-Type': 'application/json' };
     body = JSON.stringify(common);
   }
-  const response = await fetchWithTimeout(url, { method: 'POST', headers, body });
+  const response = await fetchWithTimeout(url, { method: 'POST', headers, body, signal });
   const responseText = await response.text();
   const data = parseJsonSafely(responseText);
   if (!response.ok || !data?.id) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${data?.error || responseText || '未返回任务 ID'}`);
@@ -2279,9 +2352,10 @@ async function createUpstreamVideo(apiKey, request, files) {
  * @param apiKey 视频模型 API Key。
  * @param request 视频生成参数。
  * @param upstreamTaskId 上游视频任务标识。
+ * @param {AbortSignal} signal 视频任务中止信号。
  * @returns 完成视频的远程 URL。
  */
-async function pollUpstreamVideo(apiKey, request, upstreamTaskId) {
+async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
   const env = getRuntimeEnv();
   const intervalMs = parseIntegerEnv(env.FLYREQ_VIDEO_POLL_INTERVAL_MS, 5000, { min: 1000, max: 60000 });
   const timeoutMs = parseIntegerEnv(env.FLYREQ_VIDEO_TIMEOUT_MS, 1800000, { min: 10000, max: 24 * 60 * 60 * 1000 });
@@ -2289,13 +2363,14 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId) {
   const url = appendProtocolApiPath('openai', baseUrl, `/v1/videos/${encodeURIComponent(upstreamTaskId)}`);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    signal.throwIfAborted();
+    const response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal });
     const responseText = await response.text();
     const data = parseJsonSafely(responseText);
     if (!response.ok || !data) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${responseText}`);
     if (data.status === 'completed' && typeof data.url === 'string' && data.url) return data.url;
     if (data.status === 'failed') throw new Error(String(data.error || '上游视频任务失败'));
-    await delay(intervalMs);
+    await waitForVideoPoll(intervalMs, signal);
   }
   throw new Error('视频生成超时');
 }
@@ -2305,15 +2380,22 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId) {
  * @param taskId 本地视频任务标识。
  * @param remoteUrl 上游完成视频 URL。
  * @param apiKey 下载视频时使用的 API Key。
+ * @param {AbortSignal} signal 视频任务中止信号。
  * @returns 站内视频播放地址。
  */
-async function cacheVideoResult(taskId, remoteUrl, apiKey) {
-  const response = await fetchWithTimeout(remoteUrl, { headers: { Authorization: `Bearer ${apiKey}` } });
+async function cacheVideoResult(taskId, remoteUrl, apiKey, signal) {
+  const response = await fetchWithTimeout(remoteUrl, { headers: { Authorization: `Bearer ${apiKey}` }, signal });
   if (!response.ok || !response.body) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：视频下载失败`);
   const ext = getVideoExtension(response.headers.get('content-type'));
   const filePath = path.join(VIDEO_DIR, `${taskId}.${ext}`);
-  await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(filePath));
-  return `/api/flyreq/videos/${taskId}`;
+  try {
+    await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(filePath));
+    return `/api/flyreq/videos/${taskId}`;
+  } catch (error) {
+    // 下载失败或任务取消时删除未写完的文件，避免长期占用视频目录空间。
+    try { await fs.promises.rm(filePath, { force: true }); } catch { /* 文件可能尚未创建或已被并发清理。 */ }
+    throw error;
+  }
 }
 
 /**
@@ -2325,7 +2407,8 @@ async function runVideoTask(taskId) {
   const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
   const apiKey = apiKeys.get(taskId);
   const files = taskVideoFiles.get(taskId) || { videos: [], audios: [], images: [] };
-  if (!task || !apiKey || ![TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED].includes(task.status)) {
+  const abortController = videoTaskAbortControllers.get(taskId);
+  if (!task || !apiKey || !abortController || ![TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED].includes(task.status)) {
     cleanupTaskRuntimeState(taskId);
     return;
   }
@@ -2334,22 +2417,65 @@ async function runVideoTask(taskId) {
   broadcastTask(taskId);
   broadcastQueueStatus();
   try {
-    const upstreamTaskId = await createUpstreamVideo(apiKey, request, files);
-    const remoteUrl = await pollUpstreamVideo(apiKey, request, upstreamTaskId);
-    const videoUrl = await cacheVideoResult(taskId, remoteUrl, apiKey);
+    const upstreamTaskId = await createUpstreamVideo(apiKey, request, files, abortController.signal);
+    const remoteUrl = await pollUpstreamVideo(apiKey, request, upstreamTaskId, abortController.signal);
+    const videoUrl = await cacheVideoResult(taskId, remoteUrl, apiKey, abortController.signal);
+    abortController.signal.throwIfAborted();
     const completedAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
-    db.prepare("UPDATE tasks SET status = 'completed', result_json = ?, completed_at = ?, expires_at = ? WHERE id = ?")
+    db.prepare("UPDATE tasks SET status = 'completed', result_json = ?, completed_at = ?, expires_at = ? WHERE id = ? AND status = 'processing'")
       .run(JSON.stringify({ videoUrl, upstreamTaskId }), completedAt, expiresAt, taskId);
   } catch (error) {
-    const completedAt = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
-    db.prepare("UPDATE tasks SET status = 'failed', error = ?, completed_at = ?, expires_at = ? WHERE id = ?")
-      .run(normalizeError(error), completedAt, expiresAt, taskId);
+    const latest = db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
+    if (latest?.status === TASK_STATUS.PROCESSING) {
+      const completedAt = new Date().toISOString();
+      const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+      const status = abortController.signal.aborted ? TASK_STATUS.CANCELLED : TASK_STATUS.FAILED;
+      const message = abortController.signal.aborted ? '视频任务已取消' : normalizeError(error);
+      db.prepare('UPDATE tasks SET status = ?, error = ?, completed_at = ?, expires_at = ? WHERE id = ? AND status = ?')
+        .run(status, message, completedAt, expiresAt, taskId, TASK_STATUS.PROCESSING);
+    }
   }
+  const finalTask = db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
+  if (finalTask?.status === TASK_STATUS.CANCELLED) deleteTaskVideoFile(taskId);
   cleanupTaskRuntimeState(taskId);
   broadcastTask(taskId);
   broadcastQueueStatus();
+}
+
+/**
+ * 取消排队中或处理中的视频任务，并释放其本地队列与运行期资源。
+ * @param {string} taskId 待取消的视频任务标识。
+ * @returns {{found: boolean, cancelled: boolean}} 是否找到任务以及是否成功取消。
+ */
+function cancelVideoTask(taskId) {
+  const task = db.prepare('SELECT id, status FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation');
+  if (!task) return { found: false, cancelled: false };
+  if (![TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED, TASK_STATUS.PROCESSING].includes(task.status)) {
+    return { found: true, cancelled: false };
+  }
+
+  // 第一步先写入终态，防止并发完成路径在取消后覆盖状态。
+  const completedAt = new Date().toISOString();
+  const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+  db.prepare('UPDATE tasks SET status = ?, error = ?, completed_at = ?, expires_at = ? WHERE id = ?')
+    .run(TASK_STATUS.CANCELLED, '视频任务已取消', completedAt, expiresAt, taskId);
+
+  // 第二步从等待队列移除任务，并中止本地正在进行的上游创建、轮询或缓存请求。
+  // 当前兼容协议没有定义统一的上游取消端点，因此任务已提交上游后只能停止本地继续处理。
+  for (let index = videoQueue.length - 1; index >= 0; index -= 1) {
+    if (videoQueue[index] === taskId) videoQueue.splice(index, 1);
+  }
+  const abortController = videoTaskAbortControllers.get(taskId);
+  abortController?.abort(new DOMException('视频任务已取消', 'AbortError'));
+  deleteTaskVideoFile(taskId);
+
+  // 第三步释放密钥、附件和限流计数；运行函数稍后重复清理时不会二次递减。
+  cleanupTaskRuntimeState(taskId);
+  broadcastTask(taskId);
+  broadcastQueueStatus();
+  drainVideoQueue();
+  return { found: true, cancelled: true };
 }
 
 /**
@@ -2577,6 +2703,18 @@ function cleanupExpiredTasks() {
 
 // ===== WebSocket broadcasting =====
 
+/**
+ * 判断任务状态是否已经进入不再变化的终态。
+ * @param {string} status 待判断的任务状态。
+ * @returns 完成、失败、取消或过期时返回 true。
+ */
+function isTerminalTaskStatus(status) {
+  return status === TASK_STATUS.COMPLETED
+    || status === TASK_STATUS.FAILED
+    || status === TASK_STATUS.CANCELLED
+    || status === 'expired';
+}
+
 function safeSendJson(ws, payload) {
   try {
     if (ws.readyState !== ws.OPEN) return;
@@ -2597,7 +2735,7 @@ function broadcastTask(taskId) {
       cachedPayload = { type: 'task', task };
     }
     safeSendJson(ws, cachedPayload);
-    if (cachedPayload.task.status === 'completed' || cachedPayload.task.status === 'failed' || cachedPayload.task.status === 'expired') {
+    if (isTerminalTaskStatus(cachedPayload.task.status)) {
       set.delete(taskId);
     }
   }
@@ -2645,7 +2783,7 @@ function handleSubscribeTasks(ws, taskIds) {
     const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
     const task = serializeTask(row) || { id, status: 'expired', error: '该任务已超出取回时间' };
     safeSendJson(ws, { type: 'task', task });
-    if (task.status === 'completed' || task.status === 'failed' || task.status === 'expired') {
+    if (isTerminalTaskStatus(task.status)) {
       set.delete(id);
     }
   }
@@ -3015,7 +3153,7 @@ async function handleApi(req, res, pathname) {
       return true;
     }
 
-    const videoTaskMatch = apiPathname.match(/^\/api\/flyreq\/video-tasks\/([^/]+)(?:\/(ack))?$/);
+    const videoTaskMatch = apiPathname.match(/^\/api\/flyreq\/video-tasks\/([^/]+)(?:\/(ack|cancel))?$/);
     if (videoTaskMatch) {
       const taskId = decodeURIComponent(videoTaskMatch[1]);
       const action = videoTaskMatch[2];
@@ -3028,6 +3166,19 @@ async function handleApi(req, res, pathname) {
         const existing = db.prepare('SELECT id FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation');
         if (existing) db.prepare('UPDATE tasks SET expires_at = ? WHERE id = ?').run(new Date(Date.now() + 120000).toISOString(), taskId);
         sendJson(res, 200, { ok: true });
+        return true;
+      }
+      if (req.method === 'POST' && action === 'cancel') {
+        // 取消端点只接受排队中或处理中的视频任务，并返回写入后的终态快照。
+        const cancellation = cancelVideoTask(taskId);
+        if (!cancellation.found) {
+          sendJson(res, 404, { error: '视频任务不存在或已过期' });
+        } else if (!cancellation.cancelled) {
+          sendJson(res, 409, { error: '视频任务已经结束，无法取消' });
+        } else {
+          const task = serializeTask(db.prepare('SELECT * FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation'));
+          sendJson(res, 200, task);
+        }
         return true;
       }
       sendJson(res, 405, { error: 'Method Not Allowed' });

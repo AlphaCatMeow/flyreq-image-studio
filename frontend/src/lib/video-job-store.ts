@@ -7,7 +7,7 @@ export interface VideoReferenceMetadata {
 export interface StoredVideoJob {
   id: string;
   serverTaskId?: string;
-  status: '排队中' | 'processing' | 'completed' | 'failed';
+  status: '排队中' | 'processing' | 'completed' | 'failed' | 'cancelled';
   prompt: string;
   modelId: string;
   resolution: number;
@@ -77,13 +77,17 @@ export async function cacheVideoBlob(jobId: string, url: string): Promise<string
   if (!response.ok) throw new Error('视频缓存下载失败');
   const blob = await response.blob();
   const db = await openVideoDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
-    tx.objectStore(VIDEO_STORE_NAME).put(blob, jobId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
+      tx.objectStore(VIDEO_STORE_NAME).put(blob, jobId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    // 无论事务成功或失败都关闭连接，避免后续完整备份恢复被当前页面阻塞。
+    db.close();
+  }
   return URL.createObjectURL(blob);
 }
 
@@ -94,12 +98,17 @@ export async function cacheVideoBlob(jobId: string, url: string): Promise<string
  */
 export async function restoreVideoBlobUrl(jobId: string): Promise<string | undefined> {
   const db = await openVideoDb();
-  const blob = await new Promise<Blob | undefined>((resolve, reject) => {
-    const request = db.transaction(VIDEO_STORE_NAME, 'readonly').objectStore(VIDEO_STORE_NAME).get(jobId);
-    request.onsuccess = () => resolve(request.result as Blob | undefined);
-    request.onerror = () => reject(request.error);
-  });
-  db.close();
+  let blob: Blob | undefined;
+  try {
+    blob = await new Promise<Blob | undefined>((resolve, reject) => {
+      const request = db.transaction(VIDEO_STORE_NAME, 'readonly').objectStore(VIDEO_STORE_NAME).get(jobId);
+      request.onsuccess = () => resolve(request.result as Blob | undefined);
+      request.onerror = () => reject(request.error);
+    });
+  } finally {
+    // 读取异常时同样关闭连接，确保数据库可以被升级、删除或完整恢复。
+    db.close();
+  }
   return blob ? URL.createObjectURL(blob) : undefined;
 }
 
@@ -110,11 +119,15 @@ export async function restoreVideoBlobUrl(jobId: string): Promise<string | undef
  */
 export async function deleteVideoBlob(jobId: string): Promise<void> {
   const db = await openVideoDb();
-  await new Promise<void>((resolve, reject) => {
-    const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
-    tx.objectStore(VIDEO_STORE_NAME).delete(jobId);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-  db.close();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
+      tx.objectStore(VIDEO_STORE_NAME).delete(jobId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } finally {
+    // 删除失败也必须释放连接，否则用户下一次恢复备份仍会被阻塞。
+    db.close();
+  }
 }

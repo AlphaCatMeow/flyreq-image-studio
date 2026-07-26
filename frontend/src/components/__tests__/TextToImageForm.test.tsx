@@ -51,6 +51,7 @@ async function renderForm(props: React.ComponentProps<typeof TextToImageForm>) {
 describe('TextToImageForm', () => {
   beforeEach(() => {
     localStorage.clear()
+    window.history.replaceState({}, '', '/zh/')
     localStorage.setItem('flyreq-model-registry', JSON.stringify(TEST_REGISTRY))
     vi.mocked(dispatchImageActionToast).mockClear()
   })

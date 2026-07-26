@@ -7,6 +7,7 @@ import { Slider } from '@/components/ui/slider';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { CustomSizeDialog } from '@/components/CustomSizeDialog';
 import { GptImageAdvancedParamsControl } from '@/components/GptImageAdvancedParamsControl';
+import { useI18n } from '@/components/LanguageProvider';
 import { cn } from '@/lib/utils';
 import { MODEL_OPTIONS, type ModelId } from '@/lib/gemini-config';
 import {
@@ -41,15 +42,79 @@ type ButtonSize = 'xs' | 'sm';
 interface GenerationParamsBarProps {
   value: GenerationParamsValue;
   onChange: (patch: Partial<GenerationParamsValue>) => void;
+  modelUnavailable?: boolean;
   size?: ButtonSize;
   className?: string;
+}
+
+interface AspectRatioPreviewProps {
+  ratio: AspectRatio;
+  selected: boolean;
+}
+
+/**
+ * 将比例换算为固定预览区域内的像素尺寸。
+ * @param ratio 图片宽高比。
+ * @returns 不超过 48×36 像素的预览框宽高。
+ */
+function getAspectPreviewDimensions(ratio: AspectRatio): { width: number; height: number } {
+  if (ratio === 'auto') return { width: 38, height: 28 };
+  const [widthRatio, heightRatio] = ratio.split(':').map(Number);
+  if (!widthRatio || !heightRatio) return { width: 32, height: 32 };
+  const scale = Math.min(48 / widthRatio, 36 / heightRatio);
+  return {
+    width: Math.max(6, widthRatio * scale),
+    height: Math.max(6, heightRatio * scale),
+  };
+}
+
+/**
+ * 根据比例方向生成当前语言下的直观画幅名称。
+ * @param ratio 图片宽高比。
+ * @param t 多语言翻译方法。
+ * @returns 方形、横屏、竖屏等画幅名称。
+ */
+function getAspectRatioDisplayName(ratio: AspectRatio, t: ReturnType<typeof useI18n>['t']): string {
+  if (ratio === 'auto') return t('aspectRatio.auto');
+  const [width, height] = ratio.split(':').map(Number);
+  if (width === height) return t('aspectRatio.square');
+  if (width / height >= 2) return t('aspectRatio.panorama');
+  if (height / width >= 2) return t('aspectRatio.tallPortrait');
+  return width > height ? t('aspectRatio.landscape') : t('aspectRatio.portrait');
+}
+
+/**
+ * 渲染能够直观看出输出画幅方向的比例预览框。
+ * @param props 当前比例和选中状态。
+ * @returns 固定尺寸区域内按真实比例缩放的轮廓框。
+ */
+function AspectRatioPreview({ ratio, selected }: AspectRatioPreviewProps) {
+  const dimensions = getAspectPreviewDimensions(ratio);
+  return (
+    <div className="flex h-10 w-full items-center justify-center" aria-hidden="true">
+      <span
+        data-testid={`aspect-ratio-preview-${ratio.replace(/[^0-9a-z]+/gi, '-')}`}
+        className={cn(
+          'flex items-center justify-center rounded-[3px] border-2 transition-colors',
+          selected ? 'border-primary bg-primary/10' : 'border-muted-foreground/70 bg-background',
+          ratio === 'auto' && 'border-dashed',
+        )}
+        style={{ width: dimensions.width, height: dimensions.height }}
+      >
+        {ratio === 'auto' && <Sparkles className="size-3 text-muted-foreground" />}
+      </span>
+    </div>
+  );
 }
 
 /**
  * 共享的「模型 + 生成参数」控件条（自宿主 TextToImageForm 抽取）。受控：对外只发最终 patch，
  * 模型/分辨率联动级联在内部完成。文生图与无限画布编排节点共用，保证展示一致并支持自定义分辨率。
+ * @param props 当前生成参数、变更回调和按钮尺寸。
+ * @returns 模型、尺寸、比例、并行数和高级参数工具条。
  */
-export function GenerationParamsBar({ value, onChange, size = 'xs', className }: GenerationParamsBarProps) {
+export function GenerationParamsBar({ value, onChange, modelUnavailable = false, size = 'xs', className }: GenerationParamsBarProps) {
+  const { t } = useI18n();
   const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
   const [sizePopoverOpen, setSizePopoverOpen] = useState(false);
   const [aspectPopoverOpen, setAspectPopoverOpen] = useState(false);
@@ -116,10 +181,10 @@ export function GenerationParamsBar({ value, onChange, size = 'xs', className }:
   return (
     <div className={cn('flex flex-wrap items-center gap-1.5', className)}>
       {/* 模型选择 */}
-      <Popover open={modelPopoverOpen} onOpenChange={setModelPopoverOpen}>
-        <PopoverTrigger className={cn(buttonVariants({ variant: 'outline', size }), 'gap-1')} title="模型选择">
+      <Popover open={modelPopoverOpen && !modelUnavailable} onOpenChange={(open) => setModelPopoverOpen(modelUnavailable ? false : open)}>
+        <PopoverTrigger disabled={modelUnavailable} className={cn(buttonVariants({ variant: 'outline', size }), 'gap-1')} title={modelUnavailable ? t('common.notConfigured') : t('workbench.selectImageModel')}>
           <Sparkles className="h-3 w-3" />
-          <span className="shrink-0 truncate text-[11px]">{MODEL_OPTIONS.find(o => o.value === model)?.label}</span>
+          <span className="shrink-0 truncate text-[11px]">{modelUnavailable ? t('common.notConfigured') : MODEL_OPTIONS.find(o => o.value === model)?.label}</span>
         </PopoverTrigger>
         <PopoverContent className="w-48 p-1" align="start">
           {MODEL_OPTIONS.map((option) => (
@@ -192,16 +257,23 @@ export function GenerationParamsBar({ value, onChange, size = 'xs', className }:
           <RectangleHorizontal className="h-3 w-3" />
           <span className="text-[11px]">{value.aspectRatio}</span>
         </PopoverTrigger>
-        <PopoverContent className="w-52 p-1" align="start">
-          <div className="grid grid-cols-2 gap-1">
+        <PopoverContent className="w-[min(28rem,calc(100vw-2rem))] p-2" align="start">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {aspectRatioOptions.map((option) => (
               <button
+                type="button"
                 key={option.value}
                 onClick={() => handleAspectRatioChange(option.value)}
-                className={cn('flex flex-col items-start px-2 py-1.5 rounded-md text-xs hover:bg-muted', value.aspectRatio === option.value && 'bg-muted font-medium')}
+                className={cn(
+                  'relative flex min-h-24 min-w-0 flex-col items-center justify-center rounded-lg border border-border bg-card px-2 py-2 text-center text-xs transition-colors hover:border-primary/50 hover:bg-muted/60',
+                  value.aspectRatio === option.value && 'border-primary bg-primary/5 font-medium text-primary',
+                )}
               >
-                <span>{option.value}</span>
-                {option.resolution && <span className="text-[10px] text-muted-foreground">{option.resolution}</span>}
+                {value.aspectRatio === option.value && <Check className="absolute right-1.5 top-1.5 size-3.5" />}
+                <AspectRatioPreview ratio={option.value} selected={value.aspectRatio === option.value} />
+                <span className="mt-1 font-medium">{getAspectRatioDisplayName(option.value, t)}</span>
+                <span className="text-[10px] text-muted-foreground">{option.value}</span>
+                {option.resolution && <span className="max-w-full truncate text-[10px] text-muted-foreground">{option.resolution}</span>}
               </button>
             ))}
           </div>

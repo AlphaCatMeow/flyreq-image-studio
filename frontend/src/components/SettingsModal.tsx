@@ -44,6 +44,7 @@ import {
   getCompleteVideoModels,
   getImageModelOutputSizes,
   getResolvedImageModelId,
+  isCompleteVideoModel,
   isXaiImaginePresetId,
   loadRegistry,
   saveRegistry,
@@ -53,7 +54,15 @@ import {
   type TextModelConfig,
   type VideoModelConfig,
 } from '@/lib/flyreq-models';
-import { getExternalImageModelMatch, type ExternalModelConfig } from '@/lib/external-model-config';
+import {
+  getExternalImageModelMatch,
+  getExternalTextModelMatch,
+  getExternalVideoModelMatch,
+  type ExternalImageModelConfig,
+  type ExternalModelConfig,
+  type ExternalTextModelConfig,
+  type ExternalVideoModelConfig,
+} from '@/lib/external-model-config';
 import { syncDynamicModelExports } from '@/lib/gemini-config';
 import { exportAllData, importAllData, downloadBlob, generateBackupFilename, type BackupProgress as BackupProgressType } from '@/lib/backup-utils';
 import { checkModelsAvailability, type ModelStatus } from '@/lib/flyreq-task-client';
@@ -84,6 +93,48 @@ function cloneTextModel(model: TextModelConfig): TextModelConfig {
   return { ...model };
 }
 
+interface SettingsDraftSnapshot {
+  imageModels: ImageModelConfig[];
+  videoModels: VideoModelConfig[];
+  textModels: TextModelConfig[];
+  defaults: DefaultModels;
+  promptOptimizeEnabled: boolean;
+}
+
+/**
+ * 创建用于判断设置是否变化的表单快照。
+ * @param imageModels 当前图片模型草稿。
+ * @param videoModels 当前视频模型草稿。
+ * @param textModels 当前文本模型草稿。
+ * @param defaults 当前默认模型选择。
+ * @param promptOptimizeEnabled 当前提示词优化开关状态。
+ * @returns 与持久化设置字段一一对应的独立快照。
+ */
+function createSettingsSnapshot(
+  imageModels: ImageModelConfig[],
+  videoModels: VideoModelConfig[],
+  textModels: TextModelConfig[],
+  defaults: DefaultModels,
+  promptOptimizeEnabled: boolean,
+): SettingsDraftSnapshot {
+  return {
+    imageModels: imageModels.map(cloneImageModel),
+    videoModels: videoModels.map(cloneVideoModel),
+    textModels: textModels.map(cloneTextModel),
+    defaults: { ...defaults },
+    promptOptimizeEnabled,
+  };
+}
+
+/**
+ * 将设置快照序列化为可稳定比较的字符串。
+ * @param snapshot 待序列化的设置快照。
+ * @returns 保留模型顺序和全部配置字段的 JSON 字符串。
+ */
+function serializeSettingsSnapshot(snapshot: SettingsDraftSnapshot): string {
+  return JSON.stringify(snapshot);
+}
+
 /**
  * 创建视频模型配置副本。
  * @param model 原始视频模型。
@@ -98,7 +149,16 @@ function cloneVideoModel(model: VideoModelConfig): VideoModelConfig {
  * @returns 使用 OpenAI 兼容协议的未完成视频模型配置。
  */
 function createVideoModelDraft(): VideoModelConfig {
-  return { id: generateModelId('video'), protocol: 'openai', name: '', modelId: 'grok-imagine-video', apiKey: '', baseUrl: 'https://flyreq.com' };
+  return {
+    id: generateModelId('video'),
+    protocol: 'openai',
+    name: '',
+    modelId: '',
+    usesPresetModelId: true,
+    presetModelId: 'grok-imagine-video',
+    apiKey: '',
+    baseUrl: 'https://flyreq.com',
+  };
 }
 
 /**
@@ -124,14 +184,14 @@ function createImageModelDraft(): ImageModelConfig {
   };
 }
 
-function getExternalImagePresetId(config: ExternalModelConfig, fallback: ImageModelConfig['builtinPreset']) {
+function getExternalImagePresetId(config: ExternalImageModelConfig, fallback: ImageModelConfig['builtinPreset']) {
   if (config.preset) return config.preset;
   return isXaiImaginePresetId(config.modelId || '')
     ? config.modelId as ImageModelConfig['builtinPreset']
     : fallback;
 }
 
-function createExternalImageModelDraft(config: ExternalModelConfig): ImageModelConfig {
+function createExternalImageModelDraft(config: ExternalImageModelConfig): ImageModelConfig {
   const preset = BUILTIN_IMAGE_PRESETS[getExternalImagePresetId(config, 'gpt-image-2')];
   const isXaiImagine = isXaiImaginePresetId(preset.id);
   const protocol = isXaiImagine ? preset.protocol : (config.protocol || preset.protocol);
@@ -155,7 +215,7 @@ function createExternalImageModelDraft(config: ExternalModelConfig): ImageModelC
   };
 }
 
-function patchImageModelFromExternal(model: ImageModelConfig, config: ExternalModelConfig): ImageModelConfig {
+function patchImageModelFromExternal(model: ImageModelConfig, config: ExternalImageModelConfig): ImageModelConfig {
   const preset = BUILTIN_IMAGE_PRESETS[getExternalImagePresetId(config, model.builtinPreset)];
   const isXaiImagine = isXaiImaginePresetId(preset.id);
   const protocol = isXaiImagine ? preset.protocol : (config.protocol || model.protocol || preset.protocol);
@@ -204,10 +264,6 @@ function isCompleteTextModel(model: TextModelConfig): boolean {
   return Boolean(model.name.trim() && model.modelId.trim() && model.apiKey.trim() && model.baseUrl.trim());
 }
 
-function hasAnyTextModelField(model: TextModelConfig): boolean {
-  return Boolean(model.name.trim() || model.modelId.trim() || model.apiKey.trim() || model.baseUrl.trim());
-}
-
 function getImageModelLabel(models: ImageModelConfig[], id: string): string | undefined {
   return models.find((model) => model.id === id)?.name;
 }
@@ -240,6 +296,116 @@ function normalizeDefaults(
   };
 }
 
+/**
+ * 根据外链数据创建文本模型草稿。
+ * @param config 已规范化的外链文本模型配置。
+ * @returns 可在设置页继续补充并手动保存的文本模型。
+ */
+function createExternalTextModelDraft(config: ExternalTextModelConfig): TextModelConfig {
+  const template = getDefaultTextModelTemplate(config.protocol || 'openai');
+  return {
+    id: config.modelKey || generateModelId('txt'),
+    protocol: config.protocol || template.protocol,
+    name: config.name || '',
+    modelId: config.modelId || '',
+    apiKey: config.apiKey || '',
+    baseUrl: config.baseUrl || template.baseUrl,
+    note: config.note || template.note,
+  };
+}
+
+/**
+ * 使用外链中明确提供的字段更新现有文本模型。
+ * @param model 已匹配的文本模型。
+ * @param config 外链文本模型配置。
+ * @returns 保留未提供字段的更新后模型。
+ */
+function patchTextModelFromExternal(model: TextModelConfig, config: ExternalTextModelConfig): TextModelConfig {
+  return {
+    ...model,
+    protocol: config.protocol || model.protocol,
+    name: config.name ?? model.name,
+    modelId: config.modelId ?? model.modelId,
+    apiKey: config.apiKey ?? model.apiKey,
+    baseUrl: config.baseUrl ?? model.baseUrl,
+    note: config.note ?? model.note,
+  };
+}
+
+/**
+ * 根据外链数据创建 OpenAI 兼容视频模型草稿。
+ * @param config 已规范化的外链视频模型配置。
+ * @returns 可在设置页继续补充并手动保存的视频模型。
+ */
+function createExternalVideoModelDraft(config: ExternalVideoModelConfig): VideoModelConfig {
+  const presetModelId = 'grok-imagine-video';
+  const configuredModelId = config.modelId?.trim() || '';
+  const usesPresetModelId = !configuredModelId || configuredModelId === presetModelId;
+  return {
+    id: config.modelKey || generateModelId('video'),
+    protocol: 'openai',
+    name: config.name || '',
+    modelId: usesPresetModelId ? '' : configuredModelId,
+    usesPresetModelId: usesPresetModelId || undefined,
+    presetModelId,
+    apiKey: config.apiKey || '',
+    baseUrl: config.baseUrl || 'https://flyreq.com',
+  };
+}
+
+/**
+ * 使用外链中明确提供的字段更新现有视频模型。
+ * @param model 已匹配的视频模型。
+ * @param config 外链视频模型配置。
+ * @returns 保留未提供字段的更新后模型。
+ */
+function patchVideoModelFromExternal(model: VideoModelConfig, config: ExternalVideoModelConfig): VideoModelConfig {
+  const presetModelId = model.presetModelId || 'grok-imagine-video';
+  const configuredModelId = config.modelId === undefined ? model.modelId.trim() : config.modelId.trim();
+  const usesPresetModelId = config.modelId === undefined
+    ? Boolean(model.usesPresetModelId)
+    : (!configuredModelId || configuredModelId === presetModelId);
+  return {
+    ...model,
+    protocol: 'openai',
+    name: config.name ?? model.name,
+    modelId: usesPresetModelId ? '' : configuredModelId,
+    usesPresetModelId: usesPresetModelId || undefined,
+    presetModelId,
+    apiKey: config.apiKey ?? model.apiKey,
+    baseUrl: config.baseUrl ?? model.baseUrl,
+  };
+}
+
+/**
+ * 归一化设置表单中的默认模型，同时保留仍存在但尚未补全的用户选择。
+ * @param defaults 当前表单默认模型。
+ * @param imageModels 当前图片模型草稿。
+ * @param videoModels 当前视频模型草稿。
+ * @param textModels 当前文本模型草稿。
+ * @returns 删除失效引用后的表单默认值；最终保存时仍使用严格完整性校验。
+ */
+function normalizeDraftDefaults(
+  defaults: DefaultModels,
+  imageModels: ImageModelConfig[],
+  videoModels: VideoModelConfig[],
+  textModels: TextModelConfig[],
+): DefaultModels {
+  const strictDefaults = normalizeDefaults(defaults, imageModels, videoModels, textModels);
+  const imageModelIds = new Set(imageModels.map(model => model.id));
+  const videoModelIds = new Set(videoModels.map(model => model.id));
+  const textModelIds = new Set(textModels.map(model => model.id));
+  return {
+    textToImage: imageModelIds.has(defaults.textToImage) ? defaults.textToImage : strictDefaults.textToImage,
+    imageToImage: imageModelIds.has(defaults.imageToImage) ? defaults.imageToImage : strictDefaults.imageToImage,
+    videoGeneration: videoModelIds.has(defaults.videoGeneration) ? defaults.videoGeneration : strictDefaults.videoGeneration,
+    reversePrompt: textModelIds.has(defaults.reversePrompt) ? defaults.reversePrompt : strictDefaults.reversePrompt,
+    agent: textModelIds.has(defaults.agent) ? defaults.agent : strictDefaults.agent,
+    promptOptimize: textModelIds.has(defaults.promptOptimize) ? defaults.promptOptimize : strictDefaults.promptOptimize,
+    imageDescribe: textModelIds.has(defaults.imageDescribe) ? defaults.imageDescribe : strictDefaults.imageDescribe,
+  };
+}
+
 export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelConfig, onExternalModelConfigConsumed }: SettingsModalProps) {
   const { t } = useI18n();
   const { platformName, platformVersion } = useBranding();
@@ -261,6 +427,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   const [showVideoApiKey, setShowVideoApiKey] = useState(false);
   const [promptOptimizeEnabled, setPromptOptimizeEnabledState] = useState(false);
   const [imageModelKeyGuide, setImageModelKeyGuide] = useState<ImageModelKeyGuide>(IMAGE_MODEL_KEY_GUIDE);
+  const [initialSnapshot, setInitialSnapshot] = useState<string | null>(null);
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
+  const [saveState, setSaveState] = useState<'idle' | 'saved'>('idle');
+  const savedStateTimerRef = useRef<number | null>(null);
 
   const [backupProgress, setBackupProgress] = useState<BackupProgressType>({ percent: 0, message: '' });
   const [isBackupActive, setIsBackupActive] = useState(false);
@@ -271,13 +441,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   useEffect(() => {
     if (!isOpen) return;
     const registry = loadRegistry();
+    const normalizedDefaults = normalizeDefaults(registry.defaults, registry.imageModels, registry.videoModels, registry.textModels);
+    const optimizeEnabled = isPromptOptimizeEnabled();
+    if (savedStateTimerRef.current !== null) {
+      window.clearTimeout(savedStateTimerRef.current);
+      savedStateTimerRef.current = null;
+    }
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
       setImageModels(registry.imageModels.map(cloneImageModel));
       setTextModels(registry.textModels.map(cloneTextModel));
       setVideoModels(registry.videoModels.map(cloneVideoModel));
-      setDefaults(normalizeDefaults(registry.defaults, registry.imageModels, registry.videoModels, registry.textModels));
+      setDefaults(normalizedDefaults);
       setSelectedImageModelId(registry.imageModels[0]?.id || '');
       setSelectedTextModelId(registry.textModels[0]?.id || '');
       setSelectedVideoModelId(registry.videoModels[0]?.id || '');
@@ -288,7 +464,16 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
       setModelCheckError(null);
       setBackupError(null);
       setBackupSuccess(null);
-      setPromptOptimizeEnabledState(isPromptOptimizeEnabled());
+      setPromptOptimizeEnabledState(optimizeEnabled);
+      setCloseConfirmOpen(false);
+      setSaveState('idle');
+      setInitialSnapshot(serializeSettingsSnapshot(createSettingsSnapshot(
+        registry.imageModels,
+        registry.videoModels,
+        registry.textModels,
+        normalizedDefaults,
+        optimizeEnabled,
+      )));
     });
     return () => { cancelled = true; };
   }, [isOpen]);
@@ -322,46 +507,104 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
-      setImageModels((prev) => {
-        const existing = getExternalImageModelMatch(prev, externalModelConfig);
-        const nextModel = existing
-          ? patchImageModelFromExternal(existing, externalModelConfig)
-          : createExternalImageModelDraft(externalModelConfig);
-        setSelectedImageModelId(nextModel.id);
-        // 外链配置是首次引导的目标模型，即使用户稍后才填写 API Key，也必须预先成为两个生图工作流的默认模型。
-        setDefaults((current) => ({
-          ...current,
-          textToImage: nextModel.id,
-          imageToImage: nextModel.id,
-        }));
-        return existing
-          ? prev.map((model) => (model.id === existing.id ? nextModel : model))
-          : [...prev, nextModel];
-      });
+      if (externalModelConfig.type === 'image') {
+        setImageModels((prev) => {
+          const existing = getExternalImageModelMatch(prev, externalModelConfig);
+          const nextModel = existing
+            ? patchImageModelFromExternal(existing, externalModelConfig)
+            : createExternalImageModelDraft(externalModelConfig);
+          setSelectedImageModelId(nextModel.id);
+          // 图片外链目标预先成为两个生图工作流默认值，最终保存时再执行完整性校验。
+          setDefaults((current) => ({ ...current, textToImage: nextModel.id, imageToImage: nextModel.id }));
+          return existing ? prev.map(model => model.id === existing.id ? nextModel : model) : [...prev, nextModel];
+        });
+      } else if (externalModelConfig.type === 'text') {
+        setTextModels((prev) => {
+          const existing = getExternalTextModelMatch(prev, externalModelConfig);
+          const nextModel = existing
+            ? patchTextModelFromExternal(existing, externalModelConfig)
+            : createExternalTextModelDraft(externalModelConfig);
+          setSelectedTextModelId(nextModel.id);
+          // 单个外链文本模型作为全部文本工作流的初始默认值，用户仍可在保存前分别调整。
+          setDefaults((current) => ({
+            ...current,
+            reversePrompt: nextModel.id,
+            agent: nextModel.id,
+            promptOptimize: nextModel.id,
+            imageDescribe: nextModel.id,
+          }));
+          return existing ? prev.map(model => model.id === existing.id ? nextModel : model) : [...prev, nextModel];
+        });
+      } else {
+        setVideoModels((prev) => {
+          const existing = getExternalVideoModelMatch(prev, externalModelConfig);
+          const nextModel = existing
+            ? patchVideoModelFromExternal(existing, externalModelConfig)
+            : createExternalVideoModelDraft(externalModelConfig);
+          setSelectedVideoModelId(nextModel.id);
+          // 视频外链目标预先成为视频生成默认值，缺少 API Key 时作为未激活草稿保留。
+          setDefaults((current) => ({ ...current, videoGeneration: nextModel.id }));
+          return existing ? prev.map(model => model.id === existing.id ? nextModel : model) : [...prev, nextModel];
+        });
+      }
+      const readyNoticeKey = externalModelConfig.type === 'image'
+        ? 'settings.externalImageConfigReady'
+        : externalModelConfig.type === 'text'
+          ? 'settings.externalTextConfigReady'
+          : 'settings.externalVideoConfigReady';
+      const needsKeyNoticeKey = externalModelConfig.type === 'image'
+        ? 'settings.externalImageConfigNeedsKey'
+        : externalModelConfig.type === 'text'
+          ? 'settings.externalTextConfigNeedsKey'
+          : 'settings.externalVideoConfigNeedsKey';
       setExternalConfigNotice(
         externalModelConfig.apiKey
-          ? '已从外部链接带入模型配置，并将其设为文生图/图生图默认模型。请确认后点击“保存设置”。URL 中的配置参数已清理。'
-          : '已从外部链接带入模型配置，请补充 API Key 后点击“保存设置”。URL 中的配置参数已清理。',
+          ? t(readyNoticeKey)
+          : t(needsKeyNoticeKey),
       );
       setError(null);
       setSuccess(null);
       onExternalModelConfigConsumed?.();
     });
     return () => { cancelled = true; };
-  }, [externalModelConfig, isOpen, onExternalModelConfigConsumed]);
+  }, [externalModelConfig, isOpen, onExternalModelConfigConsumed, t]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || initialSnapshot === null) return;
     let cancelled = false;
     queueMicrotask(() => {
       if (cancelled) return;
       setDefaults((prev) => {
-        const next = normalizeDefaults(prev, imageModels, videoModels, textModels);
+        const next = normalizeDraftDefaults(prev, imageModels, videoModels, textModels);
         return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
       });
     });
     return () => { cancelled = true; };
-  }, [imageModels, isOpen, textModels, videoModels]);
+  }, [imageModels, initialSnapshot, isOpen, textModels, videoModels]);
+
+  const currentSerializedSnapshot = useMemo(
+    () => serializeSettingsSnapshot(createSettingsSnapshot(
+      imageModels,
+      videoModels,
+      textModels,
+      defaults,
+      promptOptimizeEnabled,
+    )),
+    [defaults, imageModels, promptOptimizeEnabled, textModels, videoModels],
+  );
+  const isDirty = initialSnapshot !== null && currentSerializedSnapshot !== initialSnapshot;
+
+  useEffect(() => {
+    if (isOpen) return;
+    if (savedStateTimerRef.current !== null) {
+      window.clearTimeout(savedStateTimerRef.current);
+      savedStateTimerRef.current = null;
+    }
+  }, [isOpen]);
+
+  useEffect(() => () => {
+    if (savedStateTimerRef.current !== null) window.clearTimeout(savedStateTimerRef.current);
+  }, []);
 
   const selectedImageModel = useMemo(
     () => imageModels.find((model) => model.id === selectedImageModelId) || null,
@@ -461,7 +704,12 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
    * @returns 无返回值。
    */
   const handleUpdateVideoModel = (id: string, patch: Partial<VideoModelConfig>) => {
-    setVideoModels(previous => previous.map(model => model.id === id ? { ...model, ...patch, protocol: 'openai' } : model));
+    setVideoModels(previous => previous.map(model => {
+      if (model.id !== id) return model;
+      const next = { ...model, ...patch, protocol: 'openai' as const };
+      if ('modelId' in patch) next.usesPresetModelId = !next.modelId.trim();
+      return next;
+    }));
   };
 
   /**
@@ -508,49 +756,96 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
 
   /**
    * 保存当前模型注册表和默认模型选择。
-   * @returns 无返回值；校验失败时仅更新错误提示，成功时持久化本地配置。
+   * @param showSavedFeedback 保存后是否显示短暂成功状态。
+   * @returns 保存成功时返回 true；校验失败时返回 false 并更新错误提示。
    */
-  const persistRegistry = () => {
+  const persistRegistry = (showSavedFeedback: boolean = true): boolean => {
     const hasNoCompleteImageModelBeforeSave = getCompleteImageModels(loadRegistry()).length === 0;
-    const enabledTextModels = textModels.filter(hasAnyTextModelField);
-    if (enabledTextModels.length > 0 && !enabledTextModels.every(isCompleteTextModel)) {
-      setError('文本模型如需启用，请填写完整；不需要文本功能时可以留空或删除');
-      return;
-    }
-    if (promptOptimizeEnabled && !enabledTextModels.some(isCompleteTextModel)) {
-      setError('启用提示词优化前，请先完成至少一个文本模型配置');
-      return;
+    if (promptOptimizeEnabled && !textModels.some(isCompleteTextModel)) {
+      setError(t('settings.promptOptimizeRequiresTextModel'));
+      return false;
     }
 
+    // 第一步只把完整模型写入默认工作流，未完成模型仍作为草稿保存在注册表中。
+    const normalizedDefaults = normalizeDefaults(defaults, imageModels, videoModels, textModels);
     const registry = {
       imageModels,
       videoModels,
-      textModels: enabledTextModels,
-      defaults: normalizeDefaults(defaults, imageModels, videoModels, enabledTextModels),
+      textModels,
+      defaults: normalizedDefaults,
     };
 
+    // 第二步持久化全部草稿，再同步依赖注册表的工作台缓存与跨组件事件。
     saveRegistry(registry);
     if (hasNoCompleteImageModelBeforeSave && registry.defaults.textToImage) {
       saveFirstImageModelAsFormDefault(registry.defaults.textToImage);
       notifyImageModelDefaultUpdated();
     }
     if (!setPromptOptimizeEnabled(promptOptimizeEnabled)) {
-      setError('启用提示词优化前，请先完成至少一个文本模型配置');
-      return;
+      setError(t('settings.promptOptimizeRequiresTextModel'));
+      return false;
     }
     syncDynamicModelExports();
     window.dispatchEvent(new Event('flyreq-model-registry-updated'));
     onApiKeyChange?.(hasConfiguredImageModel());
-    setSuccess('设置已保存');
+    setDefaults(normalizedDefaults);
+    setSuccess(null);
     setExternalConfigNotice(null);
     setError(null);
     setModelStatuses(null);
     setModelCheckError(null);
+    // 第三步用实际写入的数据刷新比较基线，确保保存栏立即进入成功状态并自动收起。
+    setInitialSnapshot(serializeSettingsSnapshot(createSettingsSnapshot(
+      imageModels,
+      videoModels,
+      textModels,
+      normalizedDefaults,
+      promptOptimizeEnabled,
+    )));
+    if (savedStateTimerRef.current !== null) window.clearTimeout(savedStateTimerRef.current);
+    savedStateTimerRef.current = null;
+    setSaveState(showSavedFeedback ? 'saved' : 'idle');
+    if (showSavedFeedback) savedStateTimerRef.current = window.setTimeout(() => {
+      setSaveState('idle');
+      savedStateTimerRef.current = null;
+    }, 1500);
+    return true;
+  };
+
+  /**
+   * 处理设置弹窗关闭请求，存在未保存内容时先打开三选项确认层。
+   * @returns 无返回值；根据脏状态关闭弹窗或显示确认层。
+   */
+  const requestClose = (): void => {
+    if (isDirty) {
+      setCloseConfirmOpen(true);
+      return;
+    }
+    onClose();
+  };
+
+  /**
+   * 保存当前配置并在成功后关闭设置弹窗。
+   * @returns 无返回值；校验失败时保留弹窗供用户继续修改。
+   */
+  const handleSaveAndClose = (): void => {
+    if (!persistRegistry(false)) return;
+    setCloseConfirmOpen(false);
+    onClose();
+  };
+
+  /**
+   * 放弃本次未保存修改并关闭设置弹窗。
+   * @returns 无返回值。
+   */
+  const handleDiscardAndClose = (): void => {
+    setCloseConfirmOpen(false);
+    onClose();
   };
 
   const handlePromptOptimizeToggle = (checked: boolean) => {
     if (checked && !textModels.some(isCompleteTextModel)) {
-      setError('启用提示词优化前，请先完成至少一个文本模型配置');
+      setError(t('settings.promptOptimizeRequiresTextModel'));
       setPromptOptimizeEnabledState(false);
       return;
     }
@@ -561,11 +856,11 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   const handleCheckModels = async () => {
     const configuredModels = [
       ...imageModels.filter(isCompleteImageModel),
-      ...videoModels.filter(model => Boolean(model.name.trim() && model.modelId.trim() && model.apiKey.trim() && model.baseUrl.trim())),
+      ...videoModels.filter(isCompleteVideoModel),
       ...textModels.filter(isCompleteTextModel),
     ];
     if (configuredModels.length === 0) {
-      setModelCheckError('请先完成至少一个图片模型或文本模型配置');
+      setModelCheckError(t('settings.checkModelsRequiresModel'));
       return;
     }
 
@@ -576,7 +871,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
       const statuses = await checkModelsAvailability(configuredModels.map((model) => model.id));
       setModelStatuses(statuses);
     } catch (err) {
-      setModelCheckError(err instanceof Error ? err.message : '检查模型失败');
+      setModelCheckError(err instanceof Error ? err.message : t('settings.checkModelsFailed'));
     } finally {
       setCheckingModels(false);
     }
@@ -587,12 +882,12 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     setBackupError(null);
     setBackupSuccess(null);
     try {
-      const blob = await exportAllData((progress) => setBackupProgress(progress), platformVersion);
+      const blob = await exportAllData((progress) => setBackupProgress({ ...progress, message: t(progress.message as Parameters<typeof t>[0], progress.values) }), platformVersion);
       const filename = generateBackupFilename();
       downloadBlob(blob, filename);
-      setBackupSuccess(`数据已成功导出为 ${filename}`);
+      setBackupSuccess(t('settings.exportSuccess', { filename }));
     } catch (err) {
-      setBackupError(err instanceof Error ? err.message : '导出失败');
+      setBackupError(err instanceof Error ? err.message : t('settings.exportFailed'));
     } finally {
       setIsBackupActive(false);
     }
@@ -600,7 +895,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
 
   const handleImport = async (file: File) => {
     if (!file.name.endsWith('.zip')) {
-      setBackupError('请选择有效的备份文件（.zip 格式）');
+      setBackupError(t('settings.invalidBackup'));
       return;
     }
 
@@ -608,11 +903,11 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     setBackupError(null);
     setBackupSuccess(null);
     try {
-      await importAllData(file, (progress) => setBackupProgress(progress));
-      setBackupSuccess('数据已成功导入，页面将在 2 秒后刷新。');
+      await importAllData(file, (progress) => setBackupProgress({ ...progress, message: t(progress.message as Parameters<typeof t>[0], progress.values) }));
+      setBackupSuccess(t('settings.importSuccess'));
       setTimeout(() => window.location.reload(), 2000);
     } catch (err) {
-      setBackupError(err instanceof Error ? err.message : '导入失败');
+      setBackupError(err instanceof Error ? err.message : t('settings.importFailed'));
       setIsBackupActive(false);
     }
   };
@@ -625,7 +920,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
 
   const completeImageOptions = imageModels.filter(isCompleteImageModel).map((model) => ({ value: model.id, label: model.name }));
   const completeTextOptions = textModels.filter(isCompleteTextModel).map((model) => ({ value: model.id, label: model.name }));
-  const completeVideoOptions = videoModels.filter(model => Boolean(model.name.trim() && model.modelId.trim() && model.apiKey.trim() && model.baseUrl.trim())).map(model => ({ value: model.id, label: model.name }));
+  const completeVideoOptions = videoModels.filter(isCompleteVideoModel).map(model => ({ value: model.id, label: model.name }));
   const needsImageModelKeyGuide = !imageModels.some(isCompleteImageModel);
   const selectedImageOutputSizes: ImageModelConfig['maxOutputSize'][] = selectedImageModel
     ? getImageModelOutputSizes({
@@ -637,42 +932,42 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   return (
     <Dialog open={isOpen} onOpenChange={(open) => {
       if (!open && isBackupActive) return;
-      if (!open) onClose();
+      if (!open) requestClose();
     }}>
       <DialogContent className="flex max-h-[92vh] flex-col overflow-hidden p-0 pt-0 gap-0 sm:max-w-5xl">
         <DialogHeader className="p-4 pb-3">
           <div className="flex items-center gap-2">
             <Settings className="w-5 h-5 text-muted-foreground" />
-            <DialogTitle>设置</DialogTitle>
+            <DialogTitle>{t('settings.title')}</DialogTitle>
           </div>
-          <DialogDescription>按模型分别配置协议、URL 和 API Key。基础生图只需要图片模型；Agent、反推、提示词优化等智能文本功能才需要文本模型。</DialogDescription>
+          <DialogDescription>{t('settings.description')}</DialogDescription>
         </DialogHeader>
 
         <Tabs defaultValue="models" className="min-h-0 flex-1 gap-0">
           <TabsList className="w-full rounded-none border-b bg-transparent h-auto p-0">
             <TabsTrigger value="models" className="gap-2 rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-transparent data-active:shadow-none px-4 py-3">
               <ImageIcon className="w-4 h-4" />
-              模型配置
+              {t('settings.modelsTab')}
             </TabsTrigger>
             <TabsTrigger value="backup" className="gap-2 rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-transparent data-active:shadow-none px-4 py-3">
               <Database className="w-4 h-4" />
-              备份
+              {t('settings.backupTab')}
             </TabsTrigger>
             <TabsTrigger value="about" className="gap-2 rounded-none border-b-2 border-transparent data-active:border-primary data-active:bg-transparent data-active:shadow-none px-4 py-3">
               <Info className="w-4 h-4" />
-              关于
+              {t('settings.aboutTab')}
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="models" className="min-h-0 overflow-y-auto p-4 sm:p-6 mt-0 space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="space-y-1">
-                <p className="text-sm font-medium">模型级独立配置</p>
-                <p className="text-xs text-muted-foreground">每个模型单独记录协议、Base URL、API Key。外部只显示配置完整的模型。</p>
+                <p className="text-sm font-medium">{t('settings.independentModels')}</p>
+                <p className="text-xs text-muted-foreground">{t('settings.independentModelsDescription')}</p>
               </div>
-              <Button onClick={persistRegistry} className="gap-2">
+              <Button onClick={() => persistRegistry()} className="gap-2" disabled={!isDirty}>
                 <Save className="w-4 h-4" />
-                保存设置
+                {t('settings.saveNow')}
               </Button>
             </div>
 
@@ -710,12 +1005,12 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
             <div className="rounded-xl border p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="font-medium">图片模型</p>
-                  <p className="text-xs text-muted-foreground">默认提供 FlyReq 图片模型，填入 API Key 后即可使用。</p>
+                  <p className="font-medium">{t('settings.imageModels')}</p>
+                  <p className="text-xs text-muted-foreground">{t('settings.imageModelsDescription')}</p>
                 </div>
                 <Button variant="outline" size="sm" className="gap-2" onClick={handleAddImageModel}>
                   <Plus className="w-4 h-4" />
-                  新增图片模型
+                  {t('settings.addImageModel')}
                 </Button>
               </div>
 
@@ -728,8 +1023,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       onClick={() => setSelectedImageModelId(model.id)}
                       className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${selectedImageModelId === model.id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}
                     >
-                      <div className="font-medium">{model.name || '未命名模型'}</div>
-                      <div className="text-xs text-muted-foreground">{isCompleteImageModel(model) ? '配置完成' : '待补全'}</div>
+                      <div className="font-medium">{model.name || t('settings.unnamedModel')}</div>
+                      <div className="text-xs text-muted-foreground">{isCompleteImageModel(model) ? t('settings.configurationComplete') : t('settings.configurationIncomplete')}</div>
                     </button>
                   ))}
                 </div>
@@ -737,7 +1032,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                 {selectedImageModel && (
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">内置模板</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.builtinPreset')}</label>
                       <Select
                         value={selectedImageModel.builtinPreset}
                         onValueChange={(value) => handleUpdateImageModel(selectedImageModel.id, { builtinPreset: value as ImageModelConfig['builtinPreset'] })}
@@ -745,7 +1040,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">协议</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.protocol')}</label>
                       <Select
                         value={selectedImageModel.protocol}
                         disabled={isXaiImaginePresetId(selectedImageModel.builtinPreset)}
@@ -757,11 +1052,11 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">显示名称</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.displayName')}</label>
                       <Input value={selectedImageModel.name} onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { name: event.target.value })} />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">模型 ID</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.modelId')}</label>
                       <Input
                         value={selectedImageModel.modelId}
                         placeholder={BUILTIN_IMAGE_PRESETS[selectedImageModel.builtinPreset].modelId}
@@ -770,14 +1065,14 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                           usesPresetModelId: !event.target.value.trim(),
                         })}
                       />
-                      <p className="text-xs text-muted-foreground">留空时使用当前预设的默认模型 ID；填写后使用自定义模型 ID。</p>
+                      <p className="text-xs text-muted-foreground">{t('settings.modelIdPresetHint')}</p>
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">Base URL</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.baseUrl')}</label>
                       <Input value={selectedImageModel.baseUrl} onChange={(event) => handleUpdateImageModel(selectedImageModel.id, { baseUrl: event.target.value })} />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">API Key</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.apiKey')}</label>
                       <div className="relative">
                         <Input
                           type={showImageApiKey ? "text" : "password"}
@@ -788,6 +1083,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                         <button
                           type="button"
                           onClick={() => setShowImageApiKey(!showImageApiKey)}
+                          aria-label={t('settings.toggleApiKeyVisibility')}
                           className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center w-6 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                           tabIndex={-1}
                         >
@@ -796,7 +1092,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">最大参考图数量</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.maxReferenceImages')}</label>
                       <Input
                         type="number"
                         min={1}
@@ -807,7 +1103,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">最大分辨率</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.maxResolution')}</label>
                       <Select
                         value={selectedImageModel.maxOutputSize}
                         onValueChange={(value) => handleUpdateImageModel(selectedImageModel.id, { maxOutputSize: value as ImageModelConfig['maxOutputSize'] })}
@@ -817,8 +1113,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                     {selectedImageModel.protocol === 'google' && (
                       <div className="md:col-span-2 flex items-center justify-between rounded-lg border px-3 py-2">
                         <div>
-                          <p className="text-sm font-medium">温度参数</p>
-                          <p className="text-xs text-muted-foreground">仅在当前上游图片模型明确兼容 Gemini temperature 参数时开启；关闭后工作台不会显示或发送温度。</p>
+                          <p className="text-sm font-medium">{t('settings.temperatureTitle')}</p>
+                          <p className="text-xs text-muted-foreground">{t('settings.temperatureDescription')}</p>
                         </div>
                         <Switch
                           checked={Boolean(selectedImageModel.supportsTemperature)}
@@ -830,8 +1126,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       <div className="grid gap-3 md:col-span-2">
                         <div className="flex items-center justify-between rounded-lg border px-3 py-2">
                           <div>
-                            <p className="text-sm font-medium">Image 2 额外参数</p>
-                            <p className="text-xs text-muted-foreground">透明度、质量、风格控件默认开启，用户可手动关闭。</p>
+                            <p className="text-sm font-medium">{t('settings.advancedImageTitle')}</p>
+                            <p className="text-xs text-muted-foreground">{t('settings.advancedImageDescription')}</p>
                           </div>
                           <Switch
                             checked={selectedImageModel.supportsAdvancedParams}
@@ -840,8 +1136,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                         </div>
                         <div className="flex items-center justify-between rounded-lg border px-3 py-2">
                           <div>
-                            <p className="text-sm font-medium">流式图片请求</p>
-                            <p className="text-xs text-muted-foreground">向 OpenAI Images 兼容接口发送 stream=true，可降低 Cloudflare/Nginx 长连接 504 风险；上游不支持时会直接报告错误。</p>
+                            <p className="text-sm font-medium">{t('settings.streamingImageTitle')}</p>
+                            <p className="text-xs text-muted-foreground">{t('settings.streamingImageDescription')}</p>
                           </div>
                           <Switch
                             checked={Boolean(selectedImageModel.streamImages)}
@@ -853,7 +1149,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                     <div className="md:col-span-2 flex justify-end">
                       <Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={() => handleDeleteImageModel(selectedImageModel.id)}>
                         <Trash2 className="w-4 h-4" />
-                        删除模型
+                        {t('settings.deleteModel')}
                       </Button>
                     </div>
                   </div>
@@ -875,7 +1171,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
               <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
                 <div className="space-y-2">
                   {videoModels.map(model => {
-                    const complete = Boolean(model.name.trim() && model.modelId.trim() && model.apiKey.trim() && model.baseUrl.trim());
+                    const complete = isCompleteVideoModel(model);
                     return (
                       <button key={model.id} type="button" onClick={() => setSelectedVideoModelId(model.id)} className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${selectedVideoModelId === model.id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}>
                         <div className="truncate font-medium">{model.name || t('settings.unnamedModel')}</div>
@@ -889,7 +1185,15 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.protocol')}</label><Select value="openai" disabled onValueChange={() => undefined} options={[{ value: 'openai', label: 'OpenAI Videos' }]} /></div>
                     <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.displayName')}</label><Input value={selectedVideoModel.name} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { name: event.target.value })} /></div>
-                    <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.modelId')}</label><Input value={selectedVideoModel.modelId} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { modelId: event.target.value })} /></div>
+                    <div className="space-y-2">
+                      <label className="text-xs text-muted-foreground">{t('settings.modelId')}</label>
+                      <Input
+                        value={selectedVideoModel.modelId}
+                        placeholder={selectedVideoModel.presetModelId || 'grok-imagine-video'}
+                        onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { modelId: event.target.value, usesPresetModelId: !event.target.value.trim() })}
+                      />
+                      <p className="text-xs text-muted-foreground">{t('settings.modelIdPresetHint')}</p>
+                    </div>
                     <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.baseUrl')}</label><Input value={selectedVideoModel.baseUrl} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { baseUrl: event.target.value })} /></div>
                     <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">{t('settings.apiKey')}</label><div className="relative"><Input type={showVideoApiKey ? 'text' : 'password'} value={selectedVideoModel.apiKey} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { apiKey: event.target.value })} className="pr-9" /><button type="button" onClick={() => setShowVideoApiKey(value => !value)} className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted" aria-label={t('settings.apiKey')}>{showVideoApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div></div>
                     <div className="flex justify-end md:col-span-2"><Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={() => handleDeleteVideoModel(selectedVideoModel.id)}><Trash2 className="size-4" />{t('settings.deleteModel')}</Button></div>
@@ -901,12 +1205,12 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
             <div className="rounded-xl border p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="font-medium">文本模型</p>
-                  <p className="text-xs text-muted-foreground">可选。仅 Agent、反推、提示词优化、图片描述等功能需要。</p>
+                  <p className="font-medium">{t('settings.textModels')}</p>
+                  <p className="text-xs text-muted-foreground">{t('settings.textModelsDescription')}</p>
                 </div>
                 <Button variant="outline" size="sm" className="gap-2" onClick={handleAddTextModel}>
                   <Plus className="w-4 h-4" />
-                  新增文本模型
+                  {t('settings.addTextModel')}
                 </Button>
               </div>
 
@@ -919,8 +1223,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       onClick={() => setSelectedTextModelId(model.id)}
                       className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${selectedTextModelId === model.id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}
                     >
-                      <div className="font-medium">{model.name || '未命名模型'}</div>
-                      <div className="text-xs text-muted-foreground">{isCompleteTextModel(model) ? '配置完成' : '待补全'}</div>
+                      <div className="font-medium">{model.name || t('settings.unnamedModel')}</div>
+                      <div className="text-xs text-muted-foreground">{isCompleteTextModel(model) ? t('settings.configurationComplete') : t('settings.configurationIncomplete')}</div>
                     </button>
                   ))}
                 </div>
@@ -928,7 +1232,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                 {selectedTextModel && (
                   <div className="grid gap-3 md:grid-cols-2">
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">协议</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.protocol')}</label>
                       <Select
                         value={selectedTextModel.protocol}
                         onValueChange={(value) => {
@@ -943,19 +1247,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">显示名称</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.displayName')}</label>
                       <Input value={selectedTextModel.name} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { name: event.target.value })} />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">模型 ID</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.modelId')}</label>
                       <Input value={selectedTextModel.modelId} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { modelId: event.target.value })} />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">Base URL</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.baseUrl')}</label>
                       <Input value={selectedTextModel.baseUrl} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { baseUrl: event.target.value })} />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-xs text-muted-foreground">API Key</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.apiKey')}</label>
                       <div className="relative">
                         <Input
                           type={showTextApiKey ? "text" : "password"}
@@ -966,6 +1270,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                         <button
                           type="button"
                           onClick={() => setShowTextApiKey(!showTextApiKey)}
+                          aria-label={t('settings.toggleApiKeyVisibility')}
                           className="absolute right-1 top-1/2 -translate-y-1/2 flex items-center justify-center w-6 h-6 rounded text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
                           tabIndex={-1}
                         >
@@ -974,13 +1279,13 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       </div>
                     </div>
                     <div className="space-y-2 md:col-span-2">
-                      <label className="text-xs text-muted-foreground">协议描述</label>
+                      <label className="text-xs text-muted-foreground">{t('settings.protocolDescription')}</label>
                       <Input value={selectedTextModel.note || ''} onChange={(event) => handleUpdateTextModel(selectedTextModel.id, { note: event.target.value })} />
                     </div>
                     <div className="md:col-span-2 flex justify-end">
                       <Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={() => handleDeleteTextModel(selectedTextModel.id)}>
                         <Trash2 className="w-4 h-4" />
-                        删除模型
+                        {t('settings.deleteModel')}
                       </Button>
                     </div>
                   </div>
@@ -991,34 +1296,34 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
             <div className="rounded-xl border p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <p className="font-medium">默认模型</p>
-                  <p className="text-xs text-muted-foreground">这里只会显示已经配置完整的模型。</p>
+                  <p className="font-medium">{t('settings.defaultModels')}</p>
+                  <p className="text-xs text-muted-foreground">{t('settings.defaultModelsDescription')}</p>
                 </div>
                 <Button variant="outline" size="sm" className="gap-2" onClick={handleCheckModels} disabled={checkingModels}>
                   <RefreshCw className={`w-4 h-4 ${checkingModels ? 'animate-spin' : ''}`} />
-                  {checkingModels ? '检查中...' : '检查模型'}
+                  {checkingModels ? t('settings.checkingModels') : t('settings.checkModels')}
                 </Button>
               </div>
 
               <div className="flex items-center justify-between gap-4 rounded-lg border bg-muted/30 px-3 py-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium">启用提示词优化按钮</p>
-                  <p className="text-xs text-muted-foreground">默认关闭。开启后会显示优化入口，并使用下方的提示词优化默认文本模型。</p>
+                  <p className="text-sm font-medium">{t('settings.promptOptimizeToggle')}</p>
+                  <p className="text-xs text-muted-foreground">{t('settings.promptOptimizeToggleDescription')}</p>
                 </div>
                 <Switch
                   checked={promptOptimizeEnabled}
                   onCheckedChange={handlePromptOptimizeToggle}
-                  aria-label="启用提示词优化按钮"
+                  aria-label={t('settings.promptOptimizeToggle')}
                 />
               </div>
 
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">文生图默认模型</label>
+                  <label className="text-xs text-muted-foreground">{t('settings.textToImageDefault')}</label>
                   <Select value={defaults.textToImage} onValueChange={(value) => setDefaults((prev) => ({ ...prev, textToImage: value }))} options={completeImageOptions} />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">图生图默认模型</label>
+                  <label className="text-xs text-muted-foreground">{t('settings.imageToImageDefault')}</label>
                   <Select value={defaults.imageToImage} onValueChange={(value) => setDefaults((prev) => ({ ...prev, imageToImage: value }))} options={completeImageOptions} />
                 </div>
                 <div className="space-y-2">
@@ -1026,19 +1331,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                   <Select value={defaults.videoGeneration} onValueChange={(value) => setDefaults((prev) => ({ ...prev, videoGeneration: value }))} options={completeVideoOptions} />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">反推提示词默认模型</label>
+                  <label className="text-xs text-muted-foreground">{t('settings.reversePromptDefault')}</label>
                   <Select value={defaults.reversePrompt} onValueChange={(value) => setDefaults((prev) => ({ ...prev, reversePrompt: value }))} options={completeTextOptions} />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">Agent 默认模型</label>
+                  <label className="text-xs text-muted-foreground">{t('settings.agentDefault')}</label>
                   <Select value={defaults.agent} onValueChange={(value) => setDefaults((prev) => ({ ...prev, agent: value }))} options={completeTextOptions} />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">提示词优化默认模型</label>
+                  <label className="text-xs text-muted-foreground">{t('settings.promptOptimizeDefault')}</label>
                   <Select value={defaults.promptOptimize} onValueChange={(value) => setDefaults((prev) => ({ ...prev, promptOptimize: value }))} options={completeTextOptions} />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs text-muted-foreground">图片描述默认模型</label>
+                  <label className="text-xs text-muted-foreground">{t('settings.imageDescribeDefault')}</label>
                   <Select value={defaults.imageDescribe} onValueChange={(value) => setDefaults((prev) => ({ ...prev, imageDescribe: value }))} options={completeTextOptions} />
                 </div>
               </div>
@@ -1063,8 +1368,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
           <TabsContent value="backup" className="min-h-0 overflow-y-auto p-4 sm:p-6 space-y-6 mt-0">
             <div className="space-y-4">
               <div className="space-y-2">
-                <h3 className="text-base font-medium">数据备份与恢复</h3>
-                <p className="text-sm text-muted-foreground">导出所有数据（模型配置、任务历史、设置、图片）为 ZIP 压缩包，或从备份文件恢复数据。</p>
+                <h3 className="text-base font-medium">{t('settings.backupTitle')}</h3>
+                <p className="text-sm text-muted-foreground">{t('settings.backupDescription')}</p>
               </div>
 
               <BackupProgress percent={backupProgress.percent} message={backupProgress.message} isActive={isBackupActive} />
@@ -1087,11 +1392,11 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                 <div className="flex items-start gap-3">
                   <Download className="w-5 h-5 text-muted-foreground mt-0.5" />
                   <div className="flex-1 space-y-2">
-                    <h4 className="font-medium">导出数据</h4>
-                    <p className="text-sm text-muted-foreground">将所有数据打包为 ZIP 文件下载到本地。备份文件包含模型配置和本地记录，请自行保管。</p>
+                    <h4 className="font-medium">{t('settings.exportTitle')}</h4>
+                    <p className="text-sm text-muted-foreground">{t('settings.exportDescription')}</p>
                     <Button onClick={handleExport} disabled={isBackupActive} className="gap-2">
                       <Download className="w-4 h-4" />
-                      全量备份
+                      {t('settings.fullBackup')}
                     </Button>
                   </div>
                 </div>
@@ -1101,12 +1406,12 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                 <div className="flex items-start gap-3">
                   <Upload className="w-5 h-5 text-muted-foreground mt-0.5" />
                   <div className="flex-1 space-y-2">
-                    <h4 className="font-medium">导入数据</h4>
-                    <p className="text-sm text-muted-foreground">从备份文件恢复数据。<span className="font-medium text-destructive">警告：这会覆盖现有数据。</span></p>
+                    <h4 className="font-medium">{t('settings.importTitle')}</h4>
+                    <p className="text-sm text-muted-foreground">{t('settings.importDescription')} <span className="font-medium text-destructive">{t('settings.importWarning')}</span></p>
                     <input ref={fileInputRef} type="file" accept=".zip" onChange={handleFileSelect} className="hidden" />
                     <Button onClick={() => fileInputRef.current?.click()} disabled={isBackupActive} variant="outline" className="gap-2">
                       <Upload className="w-4 h-4" />
-                      选择备份文件
+                      {t('settings.selectBackup')}
                     </Button>
                   </div>
                 </div>
@@ -1134,23 +1439,23 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
               <details className="group rounded-lg bg-muted/50 p-3">
                 <summary className="flex cursor-pointer select-none items-center gap-2 font-medium">
                   <span className="text-[10px] opacity-60 transition-transform group-open:rotate-90">▶</span>
-                  使用方法
+                  {t('settings.usage')}
                 </summary>
                 <ol className="mt-3 list-decimal list-inside space-y-2 text-muted-foreground">
-                  <li>基础生图只需先完成至少一个图片模型；文本模型是智能文本功能的可选配置。</li>
-                  <li>保存后，外部工作区只会显示这些配置完整的模型。</li>
-                  <li>再为各工作流指定默认模型，即可开始生图、反推或 Agent 工作流。</li>
+                  <li>{t('settings.usageStep1')}</li>
+                  <li>{t('settings.usageStep2')}</li>
+                  <li>{t('settings.usageStep3')}</li>
                 </ol>
               </details>
 
               <details className="group rounded-lg bg-muted/50 p-3">
                 <summary className="flex cursor-pointer select-none items-center gap-2 font-medium">
                   <span className="text-[10px] opacity-60 transition-transform group-open:rotate-90">▶</span>
-                  数据来源
+                  {t('settings.dataSources')}
                 </summary>
                 <ul className="mt-3 list-disc list-inside space-y-2 text-muted-foreground">
                   <li>
-                    <span className="text-foreground">提示词广场</span> - 提示词来源：
+                    <span className="text-foreground">{t('settings.promptGallerySource')}</span>
                     <ul className="mt-1 ml-5 list-disc list-inside space-y-1">
                       {PROMPT_DATA_SOURCES.map((source) => (
                         <li key={source.name}>
@@ -1162,13 +1467,13 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                     </ul>
                   </li>
                   <li>
-                    <span className="text-foreground">随机图片 · BA人物</span> -{' '}
+                    <span className="text-foreground">{t('settings.randomBaSource')}</span> -{' '}
                     <a href={BA_RANDOM_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                       img.catcdn.cn <ExternalLink className="w-3 h-3" />
                     </a>
                   </li>
                   <li>
-                    <span className="text-foreground">随机图片 · Bing壁纸</span> -{' '}
+                    <span className="text-foreground">{t('settings.randomBingSource')}</span> -{' '}
                     <a href={BING_WALLPAPER_URL} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                       bing.img.run <ExternalLink className="w-3 h-3" />
                     </a>
@@ -1179,49 +1484,49 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
               <details className="group rounded-lg bg-muted/50 p-3">
                 <summary className="flex cursor-pointer select-none items-center gap-2 font-medium">
                   <span className="text-[10px] opacity-60 transition-transform group-open:rotate-90">▶</span>
-                  隐私条款
+                  {t('settings.privacy')}
                 </summary>
                 <ul className="mt-3 list-disc list-inside space-y-2 text-muted-foreground">
-                  <li>本站为本地优先应用：模型配置、任务历史、设置与生成图片默认保存在你的浏览器本地。</li>
-                  <li>每个模型的 API Key 和 Base URL 仅用于调用你自己配置的上游服务。</li>
-                  <li>生图、反推、Agent、提示词优化等功能会把你当前选择的提示词、参考图或对话内容发送到对应模型配置的上游接口。</li>
-                  <li>备份文件可能包含模型配置、本地任务记录与图片数据，请自行妥善保管。</li>
+                  <li>{t('settings.privacyLocal')}</li>
+                  <li>{t('settings.privacyCredentials')}</li>
+                  <li>{t('settings.privacyRequests')}</li>
+                  <li>{t('settings.privacyBackup')}</li>
                 </ul>
               </details>
 
               <details className="group rounded-lg bg-muted/50 p-3">
                 <summary className="flex cursor-pointer select-none items-center gap-2 font-medium">
                   <span className="text-[10px] opacity-60 transition-transform group-open:rotate-90">▶</span>
-                  参考项目
+                  {t('settings.references')}
                 </summary>
                 <ul className="mt-3 list-disc list-inside space-y-2 text-muted-foreground">
                   <li>
-                    项目仓库：
+                    {t('settings.projectRepository')}
                     {' '}
                     <a href="https://github.com/doudou770/flyreq-image-studio" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                       doudou770/flyreq-image-studio <ExternalLink className="w-3 h-3" />
                     </a>
                   </li>
                   <li>
-                    基于
+                    {t('settings.basedOnPrefix')}
                     {' '}
                     <a href="https://github.com/tianjiangqiji/flyreq-image-studio" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                       tianjiangqiji/flyreq-image-studio <ExternalLink className="w-3 h-3" />
                     </a>
                     {' '}
-                    修改而来。
+                    {t('settings.basedOnSuffix')}
                   </li>
                   <li>
-                    基于
+                    {t('settings.basedOnPrefix')}
                     {' '}
                     <a href="https://github.com/aaronkwhite/nanobanana-studio-web" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                       aaronkwhite/nanobanana-studio-web <ExternalLink className="w-3 h-3" />
                     </a>
                     {' '}
-                    修改而来。
+                    {t('settings.basedOnSuffix')}
                   </li>
                   <li>
-                    无限画布工作区参考
+                    {t('settings.canvasReference')}
                     {' '}
                     <a href="https://github.com/basketikun/infinite-canvas" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
                       basketikun/infinite-canvas <ExternalLink className="w-3 h-3" />
@@ -1233,6 +1538,58 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
             </div>
           </TabsContent>
         </Tabs>
+
+        {(isDirty || saveState === 'saved') && (
+          <div
+            className="flex shrink-0 flex-col gap-3 border-t bg-popover/95 px-4 py-3 shadow-[0_-10px_28px_-18px_rgba(0,0,0,0.45)] backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:px-6"
+            role="status"
+            aria-live="polite"
+          >
+            <div className="flex min-w-0 items-center gap-2 text-sm font-medium">
+              {saveState === 'saved' && !isDirty ? (
+                <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
+              ) : (
+                <span className="size-2 shrink-0 rounded-full bg-amber-500" />
+              )}
+              <span className="truncate">
+                {saveState === 'saved' && !isDirty ? t('settings.configurationSaved') : t('settings.unsavedChanges')}
+              </span>
+            </div>
+            {isDirty && (
+              <Button onClick={() => persistRegistry()} className="w-full shrink-0 gap-2 sm:w-auto">
+                <Save className="size-4" />
+                {t('settings.saveConfiguration')}
+              </Button>
+            )}
+          </div>
+        )}
+
+        {closeConfirmOpen && (
+          <div className="absolute inset-0 z-20 flex items-end justify-center bg-black/50 p-3 sm:items-center sm:p-6">
+            <div
+              role="alertdialog"
+              aria-modal="true"
+              aria-labelledby="settings-unsaved-title"
+              aria-describedby="settings-unsaved-description"
+              className="w-full max-w-md rounded-lg border bg-popover p-4 text-popover-foreground shadow-xl sm:p-5"
+            >
+              <h3 id="settings-unsaved-title" className="text-base font-semibold">{t('settings.unsavedCloseTitle')}</h3>
+              <p id="settings-unsaved-description" className="mt-2 text-sm text-muted-foreground">{t('settings.unsavedCloseDescription')}</p>
+              <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button variant="ghost" className="text-destructive hover:text-destructive" onClick={handleDiscardAndClose}>
+                  {t('settings.discardChanges')}
+                </Button>
+                <Button variant="outline" onClick={() => setCloseConfirmOpen(false)}>
+                  {t('settings.continueEditing')}
+                </Button>
+                <Button onClick={handleSaveAndClose} className="gap-2">
+                  <Save className="size-4" />
+                  {t('settings.saveAndClose')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );

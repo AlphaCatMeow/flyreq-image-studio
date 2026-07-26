@@ -153,10 +153,17 @@ export function ImageGenerationWorkbench({
   const [optimizing, setOptimizing] = useState(false);
   const [optimizeError, setOptimizeError] = useState<string | null>(null);
   const optimizeHandleRef = useRef<StreamPromptOptimizeHandle | null>(null);
-  const { enabled: promptOptimizeEnabled } = usePromptOptimizeSetting();
+  const { enabled: promptOptimizeEnabled, available: promptOptimizeAvailable } = usePromptOptimizeSetting();
+  const promptOptimizeUsable = promptOptimizeEnabled && promptOptimizeAvailable;
   const imageModelDefaultRefreshVersion = useImageModelDefaultRefresh();
   const { submissionShortcut, isSmallViewport, updateSubmissionShortcut } = usePromptSubmissionShortcut();
   const shortcutLabels = getEffectivePromptSubmissionShortcutLabels(submissionShortcut, isSmallViewport);
+
+  useEffect(() => () => {
+    // 工作台卸载时终止仍在读取的提示词优化流，避免后台请求和卸载后的状态回调继续运行。
+    optimizeHandleRef.current?.abort();
+    optimizeHandleRef.current = null;
+  }, []);
 
   const maxImages = MODEL_IMAGE_LIMITS[model]?.max || 1;
   const currentMode: WorkbenchMode = pendingFiles.length > 0 ? 'image-to-image' : 'text-to-image';
@@ -702,6 +709,7 @@ export function ImageGenerationWorkbench({
               <GenerationParamsBar
                 value={{ model, outputSize, customSize, aspectRatio, temperature, parallelCount, gptImageAdvancedParams }}
                 onChange={handleParamsChange}
+                modelUnavailable={disabled}
               />
             </div>
 
@@ -767,11 +775,9 @@ export function ImageGenerationWorkbench({
               <Button variant="ghost" size="icon" onClick={() => void handleSavePromptAsset()} disabled={!prompt.trim()} title={t('workbench.savePromptAsset')}>
                 <Save className="w-4 h-4" />
               </Button>
-              {promptOptimizeEnabled && (
-                <Button variant="ghost" size="icon" onClick={handleOptimize} disabled={!prompt.trim()} title={t('workbench.optimizePrompt')}>
-                  <Sparkles className="w-4 h-4" />
-                </Button>
-              )}
+              <Button variant="ghost" size="icon" onClick={handleOptimize} disabled={!prompt.trim() || !promptOptimizeUsable} title={promptOptimizeUsable ? t('workbench.optimizePrompt') : promptOptimizeAvailable ? t('workbench.enablePromptOptimizeSetting') : t('workbench.configureDefaultTextModel')}>
+                <Sparkles className="w-4 h-4" />
+              </Button>
               <Button variant="outline" size="icon" onClick={handleClearDraft} disabled={!canClear} title={t('workbench.clearDraft')}>
                 <X className="w-5 h-5" />
               </Button>

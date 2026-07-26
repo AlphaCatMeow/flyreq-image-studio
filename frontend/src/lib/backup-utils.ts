@@ -6,6 +6,7 @@ import localforage from 'localforage';
 export interface BackupProgress {
     percent: number;
     message: string;
+    values?: Record<string, string | number>;
 }
 
 export type ProgressCallback = (progress: BackupProgress) => void;
@@ -41,6 +42,8 @@ const LOCAL_STORAGE_KEYS = [
     // 动图生成
     'flyreq-gif-settings',
     'flyreq-gif-active-job',
+    // 视频工作台任务历史
+    'flyreq-video-jobs',
     // 我的素材
     'flyreq-assets-settings',
     // 无限画布生成配置
@@ -56,6 +59,8 @@ const INDEXEDDB_DATABASES = [
     { name: 'flyreq-agent-db', version: 1, stores: ['messages', 'images', 'meta'] },
     // 本地图片素材库
     { name: 'flyreq-assets-db', version: 1, stores: ['assets', 'asset-blobs'] },
+    // 视频工作台本地结果缓存
+    { name: 'flyreq-video-results', version: 1, stores: ['videos'] },
 ];
 
 // localforage keyless 实例（无限画布：项目状态 + 图片 blob）。
@@ -216,47 +221,64 @@ function openDatabase(name: string, version: number, createStores: boolean = fal
                 if (!db.objectStoreNames.contains('asset-blobs')) {
                     db.createObjectStore('asset-blobs', { keyPath: 'key' });
                 }
+            } else if (name === 'flyreq-video-results') {
+                if (!db.objectStoreNames.contains('videos')) {
+                    db.createObjectStore('videos');
+                }
             }
         };
     });
 }
 
 /**
- * 导出单个 IndexedDB store 的所有数据
- * Blob 字段转为 Uint8Array 存入 files，JSON 中只保留引用
+ * 将 IndexedDB 值转换为可写入备份 JSON 的结构。
+ * @param value store 中读取的原始值。
+ * @param files ZIP 文件集合，Blob 二进制会写入其中。
+ * @returns 可序列化的值；Blob 会替换为二进制引用。
+ */
+async function exportBackupValue(value: unknown, files: Record<string, Uint8Array>): Promise<unknown> {
+    if (value instanceof Blob) {
+        const ref = nextBlobRef();
+        files[`blobs/${ref}`] = await blobToUint8(value);
+        return { _blobRef: ref, _blobMimeType: value.type };
+    }
+    if (!isBackupRecord(value)) return value;
+
+    const processed: BackupRecord = { ...value };
+    for (const key of Object.keys(processed)) {
+        if (processed[key] instanceof Blob) {
+            processed[key] = await exportBackupValue(processed[key], files);
+        }
+    }
+    return processed;
+}
+
+/**
+ * 导出单个 IndexedDB store 的全部记录和必要的外部 key。
+ * @param db 已打开的 IndexedDB 数据库。
+ * @param storeName 待导出的 store 名称。
+ * @param files ZIP 文件集合。
+ * @returns 可完整恢复 keyed 或 keyless store 的备份记录。
  */
 async function exportStore(db: IDBDatabase, storeName: string, files: Record<string, Uint8Array>): Promise<BackupRecord[]> {
     return new Promise((resolve, reject) => {
         try {
             const transaction = db.transaction(storeName, 'readonly');
             const store = transaction.objectStore(storeName);
-            const request = store.getAll();
+            const recordsRequest = store.getAll();
+            const keysRequest = store.getAllKeys();
+            const keyless = store.keyPath === null;
 
-            request.onsuccess = async () => {
-                const records = request.result;
-
-                const processedRecords = await Promise.all(
-                    records.map(async (record) => {
-                        const processed = { ...record };
-
-                        // 遍历所有字段，将 Blob 类型以二进制存入 files
-                        for (const key of Object.keys(processed)) {
-                            const val = processed[key];
-                            if (val instanceof Blob) {
-                                const ref = nextBlobRef();
-                                files[`blobs/${ref}`] = await blobToUint8(val);
-                                processed[key] = { _blobRef: ref, _blobMimeType: val.type };
-                            }
-                        }
-
-                        return processed;
-                    })
-                );
-
-                resolve(processedRecords);
+            transaction.oncomplete = () => {
+                void Promise.all(recordsRequest.result.map(async (record, index) => {
+                    const value = await exportBackupValue(record, files);
+                    if (keyless) {
+                        return { _idbKey: keysRequest.result[index], _idbValue: value } as BackupRecord;
+                    }
+                    return isBackupRecord(value) ? value : { _idbValue: value };
+                })).then(resolve, reject);
             };
-
-            request.onerror = () => reject(request.error);
+            transaction.onerror = () => reject(transaction.error);
         } catch (error) {
             reject(error);
         }
@@ -295,7 +317,8 @@ async function exportIndexedDB(files: Record<string, Uint8Array>, onProgress?: P
                     const percent = 10 + Math.floor((completedStores / totalStores) * 80);
                     onProgress({
                         percent,
-                        message: `正在导出 ${dbConfig.name}/${storeName}...`,
+                        message: 'settings.backupProgressExportStore',
+                        values: { store: `${dbConfig.name}/${storeName}` },
                     });
                 }
             } catch {
@@ -319,12 +342,12 @@ async function exportIndexedDB(files: Record<string, Uint8Array>, onProgress?: P
  */
 export async function exportAllData(onProgress?: ProgressCallback, appVersion: string = '0.0.0'): Promise<Blob> {
     if (onProgress) {
-        onProgress({ percent: 0, message: '开始导出数据...' });
+        onProgress({ percent: 0, message: 'settings.backupProgressExportStart' });
     }
 
     // 导出 localStorage
     if (onProgress) {
-        onProgress({ percent: 5, message: '正在导出 localStorage...' });
+        onProgress({ percent: 5, message: 'settings.backupProgressExportStorage' });
     }
     const localStorageData = exportLocalStorage();
 
@@ -337,7 +360,7 @@ export async function exportAllData(onProgress?: ProgressCallback, appVersion: s
 
     // 打包元数据和 localStorage JSON
     if (onProgress) {
-        onProgress({ percent: 90, message: '正在打包数据...' });
+        onProgress({ percent: 90, message: 'settings.backupProgressPackaging' });
     }
 
     // 添加元数据
@@ -361,7 +384,7 @@ export async function exportAllData(onProgress?: ProgressCallback, appVersion: s
     }
 
     if (onProgress) {
-        onProgress({ percent: 95, message: '正在生成 ZIP 文件...' });
+        onProgress({ percent: 95, message: 'settings.backupProgressZip' });
     }
 
     // 使用 fflate 同步压缩（比 JSZip 快 10-20 倍，内存占用更低）
@@ -369,7 +392,7 @@ export async function exportAllData(onProgress?: ProgressCallback, appVersion: s
     const blob = new Blob([zipped], { type: 'application/zip' });
 
     if (onProgress) {
-        onProgress({ percent: 100, message: '导出完成！' });
+        onProgress({ percent: 100, message: 'settings.backupProgressExportDone' });
     }
 
     return blob;
@@ -428,7 +451,9 @@ function importLocalStorage(data: unknown): void {
 }
 
 /**
- * 删除 IndexedDB 数据库
+ * 删除完整导入前的 IndexedDB 数据库。
+ * @param name 待删除的数据库名称。
+ * @returns 数据库确认删除后完成的 Promise。
  */
 async function deleteDatabase(name: string): Promise<void> {
     if (typeof indexedDB === 'undefined') return;
@@ -438,8 +463,8 @@ async function deleteDatabase(name: string): Promise<void> {
         request.onsuccess = () => resolve();
         request.onerror = () => reject(request.error);
         request.onblocked = () => {
-            // 即使被阻塞也继续，因为可能是其他标签页打开了数据库
-            resolve();
+            // 删除被其他页面连接阻塞时必须停止导入，否则后续写入会与旧记录混合并造成静默数据损坏。
+            reject(new Error(`IndexedDB 数据库 ${name} 正被其他页面占用，请关闭其他标签页后重试`));
         };
     });
 }
@@ -487,7 +512,12 @@ async function importStore(db: IDBDatabase, storeName: string, records: BackupRe
             const store = transaction.objectStore(storeName);
 
             for (const processedRecord of processedRecords) {
-                store.put(processedRecord);
+                if ('_idbKey' in processedRecord && '_idbValue' in processedRecord) {
+                    // keyless store 必须显式传回原始 key，否则视频 Blob 无法按任务 ID 恢复。
+                    store.put(processedRecord._idbValue, processedRecord._idbKey as IDBValidKey);
+                } else {
+                    store.put(processedRecord);
+                }
             }
 
             transaction.oncomplete = () => resolve();
@@ -507,10 +537,9 @@ async function importIndexedDB(data: IndexedDBBackup, unzipped: Record<string, U
 
     for (const dbConfig of INDEXEDDB_DATABASES) {
         const dbData = data[dbConfig.name];
-        if (!dbData) continue;
-
-        // 先删除整个数据库，确保重新创建
+        // 完整导入必须先删除全部受管数据库；旧备份缺少新数据库时也不能保留当前脏数据。
         await deleteDatabase(dbConfig.name);
+        if (!dbData) continue;
 
         // 重新打开数据库并导入数据（createStores=true 以便创建 stores）
         const db = await openDatabase(dbConfig.name, dbConfig.version, true);
@@ -534,7 +563,8 @@ async function importIndexedDB(data: IndexedDBBackup, unzipped: Record<string, U
                     const percent = 20 + Math.floor((completedStores / totalStores) * 70);
                     onProgress({
                         percent,
-                        message: `正在导入 ${dbConfig.name}/${storeName}...`,
+                        message: 'settings.backupProgressImportStore',
+                        values: { store: `${dbConfig.name}/${storeName}` },
                     });
                 }
             } catch {
@@ -552,12 +582,12 @@ async function importIndexedDB(data: IndexedDBBackup, unzipped: Record<string, U
  */
 export async function importAllData(file: File, onProgress?: ProgressCallback): Promise<void> {
     if (onProgress) {
-        onProgress({ percent: 0, message: '开始导入数据...' });
+        onProgress({ percent: 0, message: 'settings.backupProgressImportStart' });
     }
 
     // 解压 ZIP 文件
     if (onProgress) {
-        onProgress({ percent: 5, message: '正在解压文件...' });
+        onProgress({ percent: 5, message: 'settings.backupProgressUnzip' });
     }
 
     const buffer = await file.arrayBuffer();
@@ -579,7 +609,7 @@ export async function importAllData(file: File, onProgress?: ProgressCallback): 
 
     // 读取 localStorage 数据
     if (onProgress) {
-        onProgress({ percent: 10, message: '正在清空 localStorage...' });
+        onProgress({ percent: 10, message: 'settings.backupProgressClearStorage' });
     }
 
     // 清空现有 localStorage
@@ -592,7 +622,7 @@ export async function importAllData(file: File, onProgress?: ProgressCallback): 
     }
 
     if (onProgress) {
-        onProgress({ percent: 15, message: '正在导入 localStorage...' });
+        onProgress({ percent: 15, message: 'settings.backupProgressImportStorage' });
     }
 
     const localStorageText = readText('localStorage.json');
@@ -615,7 +645,7 @@ export async function importAllData(file: File, onProgress?: ProgressCallback): 
 
     // 读取并导入 localforage（无限画布）数据
     if (onProgress) {
-        onProgress({ percent: 92, message: '正在导入无限画布数据...' });
+        onProgress({ percent: 92, message: 'settings.backupProgressCanvas' });
     }
     const localForageData: LocalForageBackup = {};
     for (const [path, data] of Object.entries(unzipped)) {
@@ -627,7 +657,7 @@ export async function importAllData(file: File, onProgress?: ProgressCallback): 
     await importLocalForage(localForageData, unzipped);
 
     if (onProgress) {
-        onProgress({ percent: 100, message: '导入完成！' });
+        onProgress({ percent: 100, message: 'settings.backupProgressImportDone' });
     }
 }
 

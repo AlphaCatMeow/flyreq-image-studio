@@ -40,6 +40,10 @@ export interface VideoModelConfig {
   protocol: 'openai';
   name: string;
   modelId: string;
+  /** 模型 ID 留空时是否使用视频预设的默认模型 ID。 */
+  usesPresetModelId?: boolean;
+  /** 当前部署或内置配置提供的视频预设模型 ID。 */
+  presetModelId?: string;
   apiKey: string;
   baseUrl: string;
 }
@@ -64,6 +68,7 @@ export interface FlyreqModelRegistry {
 const REGISTRY_KEY = 'flyreq-model-registry';
 const DEFAULT_FLYREQ_IMAGE_MODEL_ID = 'flyreq-gpt-image-2';
 const DEFAULT_FLYREQ_VIDEO_MODEL_ID = 'flyreq-grok-imagine-video';
+export const DEFAULT_VIDEO_GENERATION_MODEL_ID = 'grok-imagine-video';
 
 export const BUILTIN_IMAGE_PRESET_OPTIONS = Object.values(BUILTIN_IMAGE_PRESETS).map((preset) => ({
   value: preset.id,
@@ -123,7 +128,9 @@ export const DEFAULT_VIDEO_MODELS: VideoModelConfig[] = [{
   id: DEFAULT_FLYREQ_VIDEO_MODEL_ID,
   protocol: 'openai',
   name: 'FlyReq',
-  modelId: 'grok-imagine-video',
+  modelId: '',
+  usesPresetModelId: true,
+  presetModelId: DEFAULT_VIDEO_GENERATION_MODEL_ID,
   apiKey: '',
   baseUrl: 'https://flyreq.com',
 }];
@@ -158,6 +165,21 @@ export function getResolvedImageModelId(
   if (customModelId) return customModelId;
   return model.usesPresetModelId
     ? BUILTIN_IMAGE_PRESETS[model.builtinPreset].modelId
+    : '';
+}
+
+/**
+ * 解析视频模型实际发送给上游的模型 ID。
+ * @param model 包含自定义模型 ID、预设标记和预设模型 ID的视频模型配置。
+ * @returns 用户填写的模型 ID；留空并启用预设时返回部署或内置的默认模型 ID。
+ */
+export function getResolvedVideoModelId(
+  model: Pick<VideoModelConfig, 'modelId' | 'usesPresetModelId' | 'presetModelId'>,
+): string {
+  const customModelId = String(model.modelId || '').trim();
+  if (customModelId) return customModelId;
+  return model.usesPresetModelId
+    ? String(model.presetModelId || DEFAULT_VIDEO_GENERATION_MODEL_ID).trim()
     : '';
 }
 
@@ -260,11 +282,18 @@ function getDeploymentDefaultImageModels(): ImageModelConfig[] {
 function normalizeVideoModelConfig(raw: Partial<VideoModelConfig>): VideoModelConfig | null {
   const id = String(raw.id || '').trim();
   if (!id) return null;
+  const configuredModelId = String(raw.modelId || '').trim();
+  const presetModelId = String(raw.presetModelId || DEFAULT_VIDEO_GENERATION_MODEL_ID).trim();
+  const usesPresetModelId = raw.usesPresetModelId === true
+    || !configuredModelId
+    || configuredModelId === presetModelId;
   return {
     id,
     protocol: 'openai',
     name: String(raw.name || '').trim(),
-    modelId: String(raw.modelId || '').trim(),
+    modelId: usesPresetModelId ? '' : configuredModelId,
+    usesPresetModelId: usesPresetModelId || undefined,
+    presetModelId,
     apiKey: String(raw.apiKey || '').trim(),
     baseUrl: String(raw.baseUrl || DEFAULT_VIDEO_MODELS[0].baseUrl).trim(),
   };
@@ -276,7 +305,12 @@ function normalizeVideoModelConfig(raw: Partial<VideoModelConfig>): VideoModelCo
  * @returns 无返回值，后续首次读取模型注册表会使用最新配置。
  */
 export function applyDeploymentDefaultVideoModel(config?: Partial<DeploymentDefaultVideoModelConfig>): void {
-  const raw = { ...DEFAULT_VIDEO_MODELS[0], ...config, apiKey: '' };
+  if (!config) {
+    deploymentDefaultVideoModel = { ...DEFAULT_VIDEO_MODELS[0] };
+    return;
+  }
+  const presetModelId = String(config.modelId || DEFAULT_VIDEO_GENERATION_MODEL_ID).trim();
+  const raw = { ...DEFAULT_VIDEO_MODELS[0], ...config, modelId: '', usesPresetModelId: true, presetModelId, apiKey: '' };
   deploymentDefaultVideoModel = normalizeVideoModelConfig(raw) || { ...DEFAULT_VIDEO_MODELS[0] };
 }
 
@@ -334,11 +368,22 @@ function isCompleteTextModel(model: Partial<TextModelConfig>): model is TextMode
  * @returns 全部必填字段有效时返回 true。
  */
 export function isCompleteVideoModel(model: Partial<VideoModelConfig>): model is VideoModelConfig {
-  return Boolean(model.id && model.name?.trim() && model.modelId?.trim() && model.apiKey?.trim() && model.baseUrl?.trim());
+  return Boolean(
+    model.id
+    && model.name?.trim()
+    && getResolvedVideoModelId({
+      modelId: model.modelId || '',
+      usesPresetModelId: model.usesPresetModelId,
+      presetModelId: model.presetModelId,
+    })
+    && model.apiKey?.trim()
+    && model.baseUrl?.trim()
+  );
 }
 
 function ensureImageModels(raw?: unknown): ImageModelConfig[] {
-  if (!Array.isArray(raw) || raw.length === 0) return getDeploymentDefaultImageModels();
+  if (!Array.isArray(raw)) return getDeploymentDefaultImageModels();
+  if (raw.length === 0) return [];
   const models = raw
     .map((item) => normalizeImageModelConfig((item || {}) as Partial<ImageModelConfig>))
     .filter((item): item is ImageModelConfig => Boolean(item))
@@ -360,7 +405,8 @@ function ensureTextModels(raw?: unknown): TextModelConfig[] {
  * @returns 去重后的模型列表；缺失时返回部署默认模型。
  */
 function ensureVideoModels(raw?: unknown): VideoModelConfig[] {
-  if (!Array.isArray(raw) || raw.length === 0) return getDeploymentDefaultVideoModels();
+  if (!Array.isArray(raw)) return getDeploymentDefaultVideoModels();
+  if (raw.length === 0) return [];
   const models = raw
     .map(item => normalizeVideoModelConfig((item || {}) as Partial<VideoModelConfig>))
     .filter((item): item is VideoModelConfig => Boolean(item))

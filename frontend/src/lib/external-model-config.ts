@@ -1,14 +1,26 @@
-import { getResolvedImageModelId, type BuiltinImagePresetId, type ImageModelConfig, type ImageOutputSize, type ProviderProtocol } from '@/lib/flyreq-models';
+import {
+  getResolvedImageModelId,
+  getResolvedVideoModelId,
+  type BuiltinImagePresetId,
+  type ImageModelConfig,
+  type ImageOutputSize,
+  type ProviderProtocol,
+  type TextModelConfig,
+  type VideoModelConfig,
+} from '@/lib/flyreq-models';
 
-export type ExternalModelConfig = {
-  type: 'image';
+interface ExternalModelConfigBase {
   modelKey?: string;
-  preset?: BuiltinImagePresetId;
-  protocol?: ProviderProtocol;
   name?: string;
   modelId?: string;
   baseUrl?: string;
   apiKey?: string;
+}
+
+export type ExternalImageModelConfig = ExternalModelConfigBase & {
+  type: 'image';
+  preset?: BuiltinImagePresetId;
+  protocol?: ProviderProtocol;
   maxRefImages?: number;
   maxOutputSize?: ImageOutputSize;
   /** 是否允许向 Google 图片接口发送温度参数。 */
@@ -16,8 +28,35 @@ export type ExternalModelConfig = {
   streamImages?: boolean;
 };
 
+export type ExternalTextModelConfig = ExternalModelConfigBase & {
+  type: 'text';
+  protocol?: ProviderProtocol;
+  note?: string;
+};
+
+export type ExternalVideoModelConfig = ExternalModelConfigBase & {
+  type: 'video';
+  protocol?: 'openai';
+};
+
+export type ExternalModelConfig = ExternalImageModelConfig | ExternalTextModelConfig | ExternalVideoModelConfig;
+
 const CONFIG_QUERY_KEYS = new Set([
   'provider',
+  'configureModel',
+  'type',
+  'modelKey',
+  'preset',
+  'protocol',
+  'name',
+  'modelId',
+  'baseUrl',
+  'apiKey',
+  'maxRefImages',
+  'maxOutputSize',
+  'supportsTemperature',
+  'streamImages',
+  'note',
 ]);
 
 function normalizePreset(value: string | null): BuiltinImagePresetId | undefined {
@@ -77,18 +116,37 @@ function parseProviderJson(value: string | null): Record<string, unknown> | null
 
 function normalizeProviderPayload(payload: Record<string, unknown>): ExternalModelConfig | null {
   const type = readString(payload.type) || 'image';
-  if (type !== 'image') return null;
   const protocol = readString(payload.provider) || readString(payload.protocol);
-
-  return {
-    type: 'image',
+  const common = {
     modelKey: readString(payload.modelKey),
-    preset: normalizePreset(readString(payload.preset) || null),
-    protocol: normalizeProvider(protocol || null),
     name: readString(payload.name),
     modelId: readString(payload.modelId),
     baseUrl: readString(payload.baseUrl),
     apiKey: readString(payload.apiKey),
+  };
+
+  if (type === 'text') {
+    return {
+      type: 'text',
+      ...common,
+      protocol: normalizeProvider(protocol || null),
+      note: readString(payload.note),
+    };
+  }
+
+  if (type === 'video') {
+    const normalizedProtocol = normalizeProvider(protocol || null);
+    if (normalizedProtocol && normalizedProtocol !== 'openai') return null;
+    return { type: 'video', ...common, protocol: 'openai' };
+  }
+
+  if (type !== 'image') return null;
+
+  return {
+    type: 'image',
+    ...common,
+    preset: normalizePreset(readString(payload.preset) || null),
+    protocol: normalizeProvider(protocol || null),
     maxRefImages: readNumber(payload.maxRefImages),
     maxOutputSize: normalizeOutputSize(readString(payload.maxOutputSize) || null),
     supportsTemperature: readBoolean(payload.supportsTemperature),
@@ -101,7 +159,24 @@ export function parseExternalModelConfig(url: URL): ExternalModelConfig | null {
   if (providerPayload) return normalizeProviderPayload(providerPayload);
 
   if (url.searchParams.get('configureModel') !== '1') return null;
-  if ((url.searchParams.get('type') || 'image') !== 'image') return null;
+  const type = url.searchParams.get('type') || 'image';
+  if (type !== 'image' && type !== 'text' && type !== 'video') return null;
+
+  const common = {
+    modelKey: readTrimmed(url.searchParams, 'modelKey'),
+    name: readTrimmed(url.searchParams, 'name'),
+    modelId: readTrimmed(url.searchParams, 'modelId'),
+    baseUrl: readTrimmed(url.searchParams, 'baseUrl'),
+    apiKey: readTrimmed(url.searchParams, 'apiKey'),
+  };
+  const protocol = normalizeProvider(url.searchParams.get('protocol') || url.searchParams.get('provider'));
+  if (type === 'text') {
+    return { type: 'text', ...common, protocol, note: readTrimmed(url.searchParams, 'note') };
+  }
+  if (type === 'video') {
+    if (protocol && protocol !== 'openai') return null;
+    return { type: 'video', ...common, protocol: 'openai' };
+  }
 
   const maxRefImagesRaw = Number(url.searchParams.get('maxRefImages'));
   const maxRefImages = Number.isFinite(maxRefImagesRaw) && maxRefImagesRaw > 0
@@ -110,13 +185,9 @@ export function parseExternalModelConfig(url: URL): ExternalModelConfig | null {
 
   return {
     type: 'image',
-    modelKey: readTrimmed(url.searchParams, 'modelKey'),
+    ...common,
     preset: normalizePreset(url.searchParams.get('preset')),
-    protocol: normalizeProvider(url.searchParams.get('protocol') || url.searchParams.get('provider')),
-    name: readTrimmed(url.searchParams, 'name'),
-    modelId: readTrimmed(url.searchParams, 'modelId'),
-    baseUrl: readTrimmed(url.searchParams, 'baseUrl'),
-    apiKey: readTrimmed(url.searchParams, 'apiKey'),
+    protocol,
     maxRefImages,
     maxOutputSize: normalizeOutputSize(url.searchParams.get('maxOutputSize')),
     supportsTemperature: readBoolean(url.searchParams.get('supportsTemperature') ?? undefined),
@@ -133,7 +204,7 @@ export function getCleanUrlAfterExternalModelConfig(url: URL): string {
   return `${clean.pathname}${clean.search}${clean.hash}`;
 }
 
-export function getExternalImageModelMatch(models: ImageModelConfig[], config: ExternalModelConfig): ImageModelConfig | undefined {
+export function getExternalImageModelMatch(models: ImageModelConfig[], config: ExternalImageModelConfig): ImageModelConfig | undefined {
   if (config.modelKey) {
     const byKey = models.find((model) => model.id === config.modelKey);
     if (byKey) return byKey;
@@ -149,4 +220,44 @@ export function getExternalImageModelMatch(models: ImageModelConfig[], config: E
     && getResolvedImageModelId(model).toLowerCase() === modelId
     && model.baseUrl.trim().replace(/\/+$/, '').toLowerCase() === baseUrl
   ));
+}
+
+/**
+ * 按稳定标识或模型签名查找外链对应的文本模型。
+ * @param models 当前文本模型列表。
+ * @param config 外链文本模型配置。
+ * @returns 匹配的现有模型；没有匹配时返回 undefined。
+ */
+export function getExternalTextModelMatch(models: TextModelConfig[], config: ExternalTextModelConfig): TextModelConfig | undefined {
+  if (config.modelKey) {
+    const byKey = models.find(model => model.id === config.modelKey);
+    if (byKey) return byKey;
+  }
+  const name = config.name?.trim().toLowerCase();
+  const modelId = config.modelId?.trim().toLowerCase();
+  const baseUrl = config.baseUrl?.trim().replace(/\/+$/, '').toLowerCase();
+  if (!name || !modelId || !baseUrl) return undefined;
+  return models.find(model => model.name.trim().toLowerCase() === name
+    && model.modelId.trim().toLowerCase() === modelId
+    && model.baseUrl.trim().replace(/\/+$/, '').toLowerCase() === baseUrl);
+}
+
+/**
+ * 按稳定标识或模型签名查找外链对应的视频模型。
+ * @param models 当前视频模型列表。
+ * @param config 外链视频模型配置。
+ * @returns 匹配的现有模型；没有匹配时返回 undefined。
+ */
+export function getExternalVideoModelMatch(models: VideoModelConfig[], config: ExternalVideoModelConfig): VideoModelConfig | undefined {
+  if (config.modelKey) {
+    const byKey = models.find(model => model.id === config.modelKey);
+    if (byKey) return byKey;
+  }
+  const name = config.name?.trim().toLowerCase();
+  const modelId = config.modelId?.trim().toLowerCase();
+  const baseUrl = config.baseUrl?.trim().replace(/\/+$/, '').toLowerCase();
+  if (!name || !modelId || !baseUrl) return undefined;
+  return models.find(model => model.name.trim().toLowerCase() === name
+    && getResolvedVideoModelId(model).toLowerCase() === modelId
+    && model.baseUrl.trim().replace(/\/+$/, '').toLowerCase() === baseUrl);
 }

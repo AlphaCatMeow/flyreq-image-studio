@@ -46,7 +46,6 @@ Built from [tianjiangqiji/nova-image-studio](https://github.com/tianjiangqiji/no
 - **Actionable failures:** Upstream errors are clearly marked while preserving the original response body. A 504 response explicitly asks the user to retry.
 - **Local-first workspace:** Browser-side configuration, job history, and assets can be backed up and restored.
 
-> Current release: **v1.5.1**
 
 ## Sponsor
 
@@ -153,7 +152,11 @@ Gallery content lives in `backend/prompts.json` and supports filtering through `
 
 ## External Model Configuration Links
 
-External sites can link to FlyReq Image with a `provider` query parameter containing model configuration JSON. The application opens Settings, fills the draft, removes the parameter from the address bar, and waits for the user to save it.
+External sites can link to FlyReq Image with a `provider` query parameter containing one image, text, or video model configuration as JSON. The application opens Settings, fills the corresponding model draft, removes all configuration parameters from the address bar, and waits for the user to save. Importing a link never writes configuration automatically.
+
+Use URL-encoded JSON in production. The raw links below are readable examples; generate a production value with `encodeURIComponent(JSON.stringify(payload))`.
+
+### Image model example
 
 ```json
 {
@@ -172,38 +175,74 @@ External sites can link to FlyReq Image with a `provider` query parameter contai
 }
 ```
 
-Use URL-encoded JSON in production links. Matching first uses `modelKey`, then `name + modelId + baseUrl`; otherwise, a new model is drafted. The API key is removed from the address bar after parsing, but it is briefly present in the URL, so distribute these links carefully.
-
-Example links:
-
-Raw JSON:
-
 ```text
 https://image.flyreq.com/en/?provider={"type":"image","preset":"gpt-image-2","provider":"openai","modelKey":"flyreq-gpt-image-2","name":"FlyReq","modelId":"gpt-image-2","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","maxRefImages":16,"maxOutputSize":"4K"}
 ```
 
-URL-encoded JSON:
+When complete, the imported image model becomes the text-to-image and image-to-image default.
+
+### Text model example
+
+```json
+{
+  "type": "text",
+  "provider": "openai",
+  "modelKey": "flyreq-text-default",
+  "name": "FlyReq Text",
+  "modelId": "gpt-5.4-mini",
+  "baseUrl": "https://flyreq.com",
+  "apiKey": "YOUR_API_KEY",
+  "note": "OpenAI Responses-compatible text model"
+}
+```
 
 ```text
-https://image.flyreq.com/en/?provider=%7B%22type%22%3A%22image%22%2C%22preset%22%3A%22gpt-image-2%22%2C%22provider%22%3A%22openai%22%2C%22modelKey%22%3A%22flyreq-gpt-image-2%22%2C%22name%22%3A%22FlyReq%22%2C%22modelId%22%3A%22gpt-image-2%22%2C%22baseUrl%22%3A%22https%3A%2F%2Fflyreq.com%22%2C%22apiKey%22%3A%22YOUR_API_KEY%22%2C%22maxRefImages%22%3A16%2C%22maxOutputSize%22%3A%224K%22%7D
+https://image.flyreq.com/en/?provider={"type":"text","provider":"openai","modelKey":"flyreq-text-default","name":"FlyReq Text","modelId":"gpt-5.4-mini","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","note":"OpenAI Responses-compatible text model"}
 ```
+
+When complete, the imported text model becomes the initial default for Agent, reverse prompt, prompt optimization, and image description. Users can change each default before saving. Text models support `openai` and `google`.
+
+### Video model example
+
+```json
+{
+  "type": "video",
+  "provider": "openai",
+  "modelKey": "flyreq-video-default",
+  "name": "FlyReq Video",
+  "modelId": "grok-imagine-video",
+  "baseUrl": "https://flyreq.com",
+  "apiKey": "YOUR_API_KEY"
+}
+```
+
+```text
+https://image.flyreq.com/en/?provider={"type":"video","provider":"openai","modelKey":"flyreq-video-default","name":"FlyReq Video","modelId":"grok-imagine-video","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY"}
+```
+
+When complete, the imported video model becomes the video-generation default. Video links only accept the OpenAI-compatible asynchronous video protocol.
+
+### Fields and behavior
 
 | Field | Description |
 | --- | --- |
-| `type=image` | Image models are currently supported. |
+| `type` | Required model kind: `image`, `text`, or `video`. Omitted values default to `image` for compatibility. |
 | `modelKey` | Optional stable model ID. Updates an existing model with the same ID. |
-| `preset` | Optional built-in preset, such as `gpt-image-2`. |
-| `provider` | Optional: `openai` or `google`. |
+| `provider` / `protocol` | `openai` or `google` for image/text models; video models only accept `openai`. |
 | `name` | Display name. |
 | `modelId` | Upstream model ID. |
 | `baseUrl` | Upstream base URL. |
 | `apiKey` | API key. |
-| `maxRefImages` | Maximum number of reference images. |
-| `maxOutputSize` | Maximum output size: `512`, `1K`, `2K`, or `4K`. |
-| `supportsTemperature` | Optional. Applies only to Google image models; `true` shows and sends `temperature`. |
-| `streamImages` | Optional. Applies only to OpenAI Images-compatible models; `true` enables streaming image requests. |
+| `preset` | Image only. Optional built-in preset such as `gpt-image-2`. |
+| `maxRefImages` | Image only. Maximum reference-image count. |
+| `maxOutputSize` | Image only: `512`, `1K`, `2K`, or `4K`. |
+| `supportsTemperature` | Image only. Enables Gemini `temperature` when supported upstream. |
+| `streamImages` | Image only. Enables streaming OpenAI Images-compatible requests. |
+| `note` | Text only. Optional protocol or deployment description. |
 
-When the supplied model is complete, it becomes the default for text-to-image and image-to-image. The browser removes the API key from the address bar immediately after parsing, but distribute these links carefully because the key is briefly present in the URL.
+Matching first uses `modelKey`, then `name + modelId + baseUrl`; otherwise, a new draft is added. Incomplete payloads are retained as inactive drafts so the user can add missing fields. Legacy `configureModel=1&type=...` multi-parameter links remain supported for all three types, and every recognized parameter is removed after parsing.
+
+The API key is briefly present in browser history, proxy logs, chat previews, and referrer metadata before the application cleans the URL. Prefer short-lived keys or omit `apiKey` and let the user enter it locally.
 
 ## Deployment
 

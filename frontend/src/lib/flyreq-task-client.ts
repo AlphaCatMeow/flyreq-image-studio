@@ -6,6 +6,7 @@ import {
   getCompleteVideoModels,
   getImageModelById,
   getResolvedImageModelId,
+  getResolvedVideoModelId,
   getTextModelById,
   loadRegistry,
   getImageApiFlavor,
@@ -273,7 +274,7 @@ export async function checkModelsAvailability(
         protocol: model.protocol,
         baseUrl: model.baseUrl,
         apiKey: model.apiKey,
-        modelId: model.modelId,
+        modelId: getResolvedVideoModelId(model),
       })),
     ];
 
