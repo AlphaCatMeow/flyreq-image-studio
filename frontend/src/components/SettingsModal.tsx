@@ -17,6 +17,7 @@ import {
   Settings,
   Trash2,
   Upload,
+  Video,
   XCircle,
 } from 'lucide-react';
 import {
@@ -40,6 +41,7 @@ import {
   generateModelId,
   getDefaultTextModelTemplate,
   getCompleteImageModels,
+  getCompleteVideoModels,
   getImageModelOutputSizes,
   getResolvedImageModelId,
   isXaiImaginePresetId,
@@ -49,6 +51,7 @@ import {
   type ImageModelConfig,
   type ProviderProtocol,
   type TextModelConfig,
+  type VideoModelConfig,
 } from '@/lib/flyreq-models';
 import { getExternalImageModelMatch, type ExternalModelConfig } from '@/lib/external-model-config';
 import { syncDynamicModelExports } from '@/lib/gemini-config';
@@ -61,6 +64,7 @@ import { BA_RANDOM_URL, BING_WALLPAPER_URL, IMAGE_MODEL_KEY_GUIDE } from '@/lib/
 import { PROMPT_DATA_SOURCES, getPromptSourceLabel } from '@/lib/prompt-gallery-data';
 import { getOutputSizeLabel } from '@/lib/model-capabilities';
 import { useBranding } from '@/components/BrandProvider';
+import { useI18n } from '@/components/LanguageProvider';
 
 type ImageModelKeyGuide = typeof IMAGE_MODEL_KEY_GUIDE;
 
@@ -78,6 +82,23 @@ function cloneImageModel(model: ImageModelConfig): ImageModelConfig {
 
 function cloneTextModel(model: TextModelConfig): TextModelConfig {
   return { ...model };
+}
+
+/**
+ * 创建视频模型配置副本。
+ * @param model 原始视频模型。
+ * @returns 可在设置表单中独立修改的副本。
+ */
+function cloneVideoModel(model: VideoModelConfig): VideoModelConfig {
+  return { ...model };
+}
+
+/**
+ * 创建新增视频模型的默认草稿。
+ * @returns 使用 OpenAI 兼容协议的未完成视频模型配置。
+ */
+function createVideoModelDraft(): VideoModelConfig {
+  return { id: generateModelId('video'), protocol: 'openai', name: '', modelId: 'grok-imagine-video', apiKey: '', baseUrl: 'https://flyreq.com' };
 }
 
 /**
@@ -198,12 +219,15 @@ function getTextModelLabel(models: TextModelConfig[], id: string): string | unde
 function normalizeDefaults(
   defaults: DefaultModels,
   imageModels: ImageModelConfig[],
+  videoModels: VideoModelConfig[],
   textModels: TextModelConfig[],
 ): DefaultModels {
   const completeImageModels = imageModels.filter(isCompleteImageModel);
   const completeTextModels = textModels.filter(isCompleteTextModel);
   const firstImageModelId = completeImageModels[0]?.id || '';
   const firstTextModelId = completeTextModels[0]?.id || '';
+  const completeVideoModels = getCompleteVideoModels({ imageModels: [], videoModels, textModels: [], defaults: DEFAULT_DEFAULTS });
+  const firstVideoModelId = completeVideoModels[0]?.id || '';
 
   return {
     textToImage: completeImageModels.some((model) => model.id === defaults.textToImage) ? defaults.textToImage : firstImageModelId,
@@ -212,16 +236,20 @@ function normalizeDefaults(
     agent: completeTextModels.some((model) => model.id === defaults.agent) ? defaults.agent : firstTextModelId,
     promptOptimize: completeTextModels.some((model) => model.id === defaults.promptOptimize) ? defaults.promptOptimize : firstTextModelId,
     imageDescribe: completeTextModels.some((model) => model.id === defaults.imageDescribe) ? defaults.imageDescribe : firstTextModelId,
+    videoGeneration: completeVideoModels.some((model) => model.id === defaults.videoGeneration) ? defaults.videoGeneration : firstVideoModelId,
   };
 }
 
 export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelConfig, onExternalModelConfigConsumed }: SettingsModalProps) {
+  const { t } = useI18n();
   const { platformName, platformVersion } = useBranding();
   const [imageModels, setImageModels] = useState<ImageModelConfig[]>([]);
   const [textModels, setTextModels] = useState<TextModelConfig[]>([]);
+  const [videoModels, setVideoModels] = useState<VideoModelConfig[]>([]);
   const [defaults, setDefaults] = useState<DefaultModels>(DEFAULT_DEFAULTS);
   const [selectedImageModelId, setSelectedImageModelId] = useState('');
   const [selectedTextModelId, setSelectedTextModelId] = useState('');
+  const [selectedVideoModelId, setSelectedVideoModelId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [externalConfigNotice, setExternalConfigNotice] = useState<string | null>(null);
@@ -230,6 +258,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   const [modelCheckError, setModelCheckError] = useState<string | null>(null);
   const [showImageApiKey, setShowImageApiKey] = useState(false);
   const [showTextApiKey, setShowTextApiKey] = useState(false);
+  const [showVideoApiKey, setShowVideoApiKey] = useState(false);
   const [promptOptimizeEnabled, setPromptOptimizeEnabledState] = useState(false);
   const [imageModelKeyGuide, setImageModelKeyGuide] = useState<ImageModelKeyGuide>(IMAGE_MODEL_KEY_GUIDE);
 
@@ -247,9 +276,11 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
       if (cancelled) return;
       setImageModels(registry.imageModels.map(cloneImageModel));
       setTextModels(registry.textModels.map(cloneTextModel));
-      setDefaults(normalizeDefaults(registry.defaults, registry.imageModels, registry.textModels));
+      setVideoModels(registry.videoModels.map(cloneVideoModel));
+      setDefaults(normalizeDefaults(registry.defaults, registry.imageModels, registry.videoModels, registry.textModels));
       setSelectedImageModelId(registry.imageModels[0]?.id || '');
       setSelectedTextModelId(registry.textModels[0]?.id || '');
+      setSelectedVideoModelId(registry.videoModels[0]?.id || '');
       setError(null);
       setSuccess(null);
       setExternalConfigNotice(null);
@@ -325,12 +356,12 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     queueMicrotask(() => {
       if (cancelled) return;
       setDefaults((prev) => {
-        const next = normalizeDefaults(prev, imageModels, textModels);
+        const next = normalizeDefaults(prev, imageModels, videoModels, textModels);
         return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
       });
     });
     return () => { cancelled = true; };
-  }, [imageModels, isOpen, textModels]);
+  }, [imageModels, isOpen, textModels, videoModels]);
 
   const selectedImageModel = useMemo(
     () => imageModels.find((model) => model.id === selectedImageModelId) || null,
@@ -339,6 +370,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   const selectedTextModel = useMemo(
     () => textModels.find((model) => model.id === selectedTextModelId) || null,
     [selectedTextModelId, textModels],
+  );
+  const selectedVideoModel = useMemo(
+    () => videoModels.find(model => model.id === selectedVideoModelId) || null,
+    [selectedVideoModelId, videoModels],
   );
 
   const handleAddImageModel = () => {
@@ -412,6 +447,35 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     setSelectedTextModelId(draft.id);
   };
 
+  /** 创建并选中一个新的视频模型草稿。 */
+  const handleAddVideoModel = () => {
+    const draft = createVideoModelDraft();
+    setVideoModels(previous => [...previous, draft]);
+    setSelectedVideoModelId(draft.id);
+  };
+
+  /**
+   * 更新指定视频模型字段。
+   * @param id 待更新模型的内部标识。
+   * @param patch 本次字段变更。
+   * @returns 无返回值。
+   */
+  const handleUpdateVideoModel = (id: string, patch: Partial<VideoModelConfig>) => {
+    setVideoModels(previous => previous.map(model => model.id === id ? { ...model, ...patch, protocol: 'openai' } : model));
+  };
+
+  /**
+   * 删除指定视频模型并清理默认值。
+   * @param id 待删除模型的内部标识。
+   * @returns 无返回值。
+   */
+  const handleDeleteVideoModel = (id: string) => {
+    const nextModels = videoModels.filter(model => model.id !== id);
+    setVideoModels(nextModels);
+    setDefaults(previous => ({ ...previous, videoGeneration: previous.videoGeneration === id ? '' : previous.videoGeneration }));
+    if (selectedVideoModelId === id) setSelectedVideoModelId(nextModels[0]?.id || '');
+  };
+
   const handleApplyTextTemplate = (id: string, protocol: ProviderProtocol) => {
     const template = getDefaultTextModelTemplate(protocol);
     handleUpdateTextModel(id, {
@@ -442,17 +506,13 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     }
   };
 
+  /**
+   * 保存当前模型注册表和默认模型选择。
+   * @returns 无返回值；校验失败时仅更新错误提示，成功时持久化本地配置。
+   */
   const persistRegistry = () => {
     const hasNoCompleteImageModelBeforeSave = getCompleteImageModels(loadRegistry()).length === 0;
     const enabledTextModels = textModels.filter(hasAnyTextModelField);
-    if (imageModels.length === 0) {
-      setError('至少填写一个图片模型');
-      return;
-    }
-    if (!imageModels.some(isCompleteImageModel)) {
-      setError('至少完成一个图片模型的全部信息');
-      return;
-    }
     if (enabledTextModels.length > 0 && !enabledTextModels.every(isCompleteTextModel)) {
       setError('文本模型如需启用，请填写完整；不需要文本功能时可以留空或删除');
       return;
@@ -464,8 +524,9 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
 
     const registry = {
       imageModels,
+      videoModels,
       textModels: enabledTextModels,
-      defaults: normalizeDefaults(defaults, imageModels, enabledTextModels),
+      defaults: normalizeDefaults(defaults, imageModels, videoModels, enabledTextModels),
     };
 
     saveRegistry(registry);
@@ -500,6 +561,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   const handleCheckModels = async () => {
     const configuredModels = [
       ...imageModels.filter(isCompleteImageModel),
+      ...videoModels.filter(model => Boolean(model.name.trim() && model.modelId.trim() && model.apiKey.trim() && model.baseUrl.trim())),
       ...textModels.filter(isCompleteTextModel),
     ];
     if (configuredModels.length === 0) {
@@ -563,6 +625,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
 
   const completeImageOptions = imageModels.filter(isCompleteImageModel).map((model) => ({ value: model.id, label: model.name }));
   const completeTextOptions = textModels.filter(isCompleteTextModel).map((model) => ({ value: model.id, label: model.name }));
+  const completeVideoOptions = videoModels.filter(model => Boolean(model.name.trim() && model.modelId.trim() && model.apiKey.trim() && model.baseUrl.trim())).map(model => ({ value: model.id, label: model.name }));
   const needsImageModelKeyGuide = !imageModels.some(isCompleteImageModel);
   const selectedImageOutputSizes: ImageModelConfig['maxOutputSize'][] = selectedImageModel
     ? getImageModelOutputSizes({
@@ -799,6 +862,43 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
             </div>
 
             <div className="rounded-xl border p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="flex items-center gap-2 font-medium"><Video className="size-4" />{t('settings.videoModels')}</p>
+                  <p className="text-xs text-muted-foreground">{t('settings.videoModelsDescription')}</p>
+                </div>
+                <Button variant="outline" size="sm" className="gap-2" onClick={handleAddVideoModel}>
+                  <Plus className="w-4 h-4" />{t('settings.addVideoModel')}
+                </Button>
+              </div>
+
+              <div className="grid gap-4 xl:grid-cols-[220px_minmax(0,1fr)]">
+                <div className="space-y-2">
+                  {videoModels.map(model => {
+                    const complete = Boolean(model.name.trim() && model.modelId.trim() && model.apiKey.trim() && model.baseUrl.trim());
+                    return (
+                      <button key={model.id} type="button" onClick={() => setSelectedVideoModelId(model.id)} className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${selectedVideoModelId === model.id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}>
+                        <div className="truncate font-medium">{model.name || t('settings.unnamedModel')}</div>
+                        <div className="text-xs text-muted-foreground">{complete ? t('settings.configurationComplete') : t('settings.configurationIncomplete')}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {selectedVideoModel && (
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.protocol')}</label><Select value="openai" disabled onValueChange={() => undefined} options={[{ value: 'openai', label: 'OpenAI Videos' }]} /></div>
+                    <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.displayName')}</label><Input value={selectedVideoModel.name} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { name: event.target.value })} /></div>
+                    <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.modelId')}</label><Input value={selectedVideoModel.modelId} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { modelId: event.target.value })} /></div>
+                    <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.baseUrl')}</label><Input value={selectedVideoModel.baseUrl} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { baseUrl: event.target.value })} /></div>
+                    <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">{t('settings.apiKey')}</label><div className="relative"><Input type={showVideoApiKey ? 'text' : 'password'} value={selectedVideoModel.apiKey} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { apiKey: event.target.value })} className="pr-9" /><button type="button" onClick={() => setShowVideoApiKey(value => !value)} className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted" aria-label={t('settings.apiKey')}>{showVideoApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div></div>
+                    <div className="flex justify-end md:col-span-2"><Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={() => handleDeleteVideoModel(selectedVideoModel.id)}><Trash2 className="size-4" />{t('settings.deleteModel')}</Button></div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="rounded-xl border p-4 space-y-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <p className="font-medium">文本模型</p>
@@ -920,6 +1020,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">图生图默认模型</label>
                   <Select value={defaults.imageToImage} onValueChange={(value) => setDefaults((prev) => ({ ...prev, imageToImage: value }))} options={completeImageOptions} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs text-muted-foreground">{t('settings.videoDefault')}</label>
+                  <Select value={defaults.videoGeneration} onValueChange={(value) => setDefaults((prev) => ({ ...prev, videoGeneration: value }))} options={completeVideoOptions} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">反推提示词默认模型</label>

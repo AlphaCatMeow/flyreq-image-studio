@@ -35,6 +35,15 @@ export interface TextModelConfig {
   note?: string;
 }
 
+export interface VideoModelConfig {
+  id: string;
+  protocol: 'openai';
+  name: string;
+  modelId: string;
+  apiKey: string;
+  baseUrl: string;
+}
+
 export interface DefaultModels {
   textToImage: string;
   imageToImage: string;
@@ -42,16 +51,19 @@ export interface DefaultModels {
   agent: string;
   promptOptimize: string;
   imageDescribe: string;
+  videoGeneration: string;
 }
 
 export interface FlyreqModelRegistry {
   imageModels: ImageModelConfig[];
+  videoModels: VideoModelConfig[];
   textModels: TextModelConfig[];
   defaults: DefaultModels;
 }
 
 const REGISTRY_KEY = 'flyreq-model-registry';
 const DEFAULT_FLYREQ_IMAGE_MODEL_ID = 'flyreq-gpt-image-2';
+const DEFAULT_FLYREQ_VIDEO_MODEL_ID = 'flyreq-grok-imagine-video';
 
 export const BUILTIN_IMAGE_PRESET_OPTIONS = Object.values(BUILTIN_IMAGE_PRESETS).map((preset) => ({
   value: preset.id,
@@ -86,6 +98,7 @@ export const DEFAULT_DEFAULTS: DefaultModels = {
   agent: '',
   promptOptimize: '',
   imageDescribe: '',
+  videoGeneration: '',
 };
 
 export const DEFAULT_IMAGE_MODELS: ImageModelConfig[] = [
@@ -106,10 +119,22 @@ export const DEFAULT_IMAGE_MODELS: ImageModelConfig[] = [
   },
 ];
 
+export const DEFAULT_VIDEO_MODELS: VideoModelConfig[] = [{
+  id: DEFAULT_FLYREQ_VIDEO_MODEL_ID,
+  protocol: 'openai',
+  name: 'FlyReq',
+  modelId: 'grok-imagine-video',
+  apiKey: '',
+  baseUrl: 'https://flyreq.com',
+}];
+
 /** 部署级下发的首次图片模型配置不携带 API Key。 */
 export type DeploymentDefaultImageModelConfig = Omit<ImageModelConfig, 'apiKey'>;
 
 let deploymentDefaultImageModel: ImageModelConfig = { ...DEFAULT_IMAGE_MODELS[0] };
+/** 部署级下发的首次视频模型配置不携带 API Key。 */
+export type DeploymentDefaultVideoModelConfig = Omit<VideoModelConfig, 'apiKey'>;
+let deploymentDefaultVideoModel: VideoModelConfig = { ...DEFAULT_VIDEO_MODELS[0] };
 
 export function isXaiImaginePresetId(presetId: string): boolean {
   return presetId === 'grok-imagine-image' || presetId === 'grok-imagine-image-quality';
@@ -227,6 +252,42 @@ function getDeploymentDefaultImageModels(): ImageModelConfig[] {
   return [{ ...deploymentDefaultImageModel }];
 }
 
+/**
+ * 归一化视频模型配置并固定为 OpenAI 兼容协议。
+ * @param raw 从本地存储或部署配置读取的原始视频模型数据。
+ * @returns 规范化后的视频模型；缺少内部标识时返回 null。
+ */
+function normalizeVideoModelConfig(raw: Partial<VideoModelConfig>): VideoModelConfig | null {
+  const id = String(raw.id || '').trim();
+  if (!id) return null;
+  return {
+    id,
+    protocol: 'openai',
+    name: String(raw.name || '').trim(),
+    modelId: String(raw.modelId || '').trim(),
+    apiKey: String(raw.apiKey || '').trim(),
+    baseUrl: String(raw.baseUrl || DEFAULT_VIDEO_MODELS[0].baseUrl).trim(),
+  };
+}
+
+/**
+ * 应用部署级首次视频模型配置，仅影响没有本地模型注册表的新浏览器。
+ * @param config 后端配置接口下发的默认视频模型；缺失时恢复内置默认值。
+ * @returns 无返回值，后续首次读取模型注册表会使用最新配置。
+ */
+export function applyDeploymentDefaultVideoModel(config?: Partial<DeploymentDefaultVideoModelConfig>): void {
+  const raw = { ...DEFAULT_VIDEO_MODELS[0], ...config, apiKey: '' };
+  deploymentDefaultVideoModel = normalizeVideoModelConfig(raw) || { ...DEFAULT_VIDEO_MODELS[0] };
+}
+
+/**
+ * 创建当前部署生效的首次视频模型副本。
+ * @returns 仅包含一个首次默认视频模型的数组。
+ */
+function getDeploymentDefaultVideoModels(): VideoModelConfig[] {
+  return [{ ...deploymentDefaultVideoModel }];
+}
+
 function normalizeTextModelConfig(raw: Partial<TextModelConfig>): TextModelConfig | null {
   const id = String(raw.id || '').trim();
   if (!id) return null;
@@ -267,6 +328,15 @@ function isCompleteTextModel(model: Partial<TextModelConfig>): model is TextMode
   );
 }
 
+/**
+ * 判断视频模型是否具备发起生成所需的全部字段。
+ * @param model 待检查的视频模型配置。
+ * @returns 全部必填字段有效时返回 true。
+ */
+export function isCompleteVideoModel(model: Partial<VideoModelConfig>): model is VideoModelConfig {
+  return Boolean(model.id && model.name?.trim() && model.modelId?.trim() && model.apiKey?.trim() && model.baseUrl?.trim());
+}
+
 function ensureImageModels(raw?: unknown): ImageModelConfig[] {
   if (!Array.isArray(raw) || raw.length === 0) return getDeploymentDefaultImageModels();
   const models = raw
@@ -284,10 +354,26 @@ function ensureTextModels(raw?: unknown): TextModelConfig[] {
     .filter((item, index, list) => list.findIndex((candidate) => candidate.id === item.id) === index);
 }
 
-function ensureDefaults(raw: Partial<DefaultModels> | undefined, imageModels: ImageModelConfig[], textModels: TextModelConfig[]): DefaultModels {
+/**
+ * 归一化视频模型数组并兼容旧注册表缺少 videoModels 的情况。
+ * @param raw 本地存储中的视频模型原始值。
+ * @returns 去重后的模型列表；缺失时返回部署默认模型。
+ */
+function ensureVideoModels(raw?: unknown): VideoModelConfig[] {
+  if (!Array.isArray(raw) || raw.length === 0) return getDeploymentDefaultVideoModels();
+  const models = raw
+    .map(item => normalizeVideoModelConfig((item || {}) as Partial<VideoModelConfig>))
+    .filter((item): item is VideoModelConfig => Boolean(item))
+    .filter((item, index, list) => list.findIndex(candidate => candidate.id === item.id) === index);
+  return models.length > 0 ? models : getDeploymentDefaultVideoModels();
+}
+
+function ensureDefaults(raw: Partial<DefaultModels> | undefined, imageModels: ImageModelConfig[], videoModels: VideoModelConfig[], textModels: TextModelConfig[]): DefaultModels {
   const completeImageModels = imageModels.filter(isCompleteImageModel);
+  const completeVideoModels = videoModels.filter(isCompleteVideoModel);
   const completeTextModels = textModels.filter(isCompleteTextModel);
   const firstImageModelId = completeImageModels[0]?.id || '';
+  const firstVideoModelId = completeVideoModels[0]?.id || '';
   const firstTextModelId = completeTextModels[0]?.id || '';
   const next = { ...DEFAULT_DEFAULTS, ...raw };
 
@@ -297,6 +383,7 @@ function ensureDefaults(raw: Partial<DefaultModels> | undefined, imageModels: Im
   if (!completeTextModels.some((model) => model.id === next.agent)) next.agent = firstTextModelId;
   if (!completeTextModels.some((model) => model.id === next.promptOptimize)) next.promptOptimize = firstTextModelId;
   if (!completeTextModels.some((model) => model.id === next.imageDescribe)) next.imageDescribe = firstTextModelId;
+  if (!completeVideoModels.some((model) => model.id === next.videoGeneration)) next.videoGeneration = firstVideoModelId;
 
   return next;
 }
@@ -304,6 +391,7 @@ function ensureDefaults(raw: Partial<DefaultModels> | undefined, imageModels: Im
 function getInitialRegistry(): FlyreqModelRegistry {
   return {
     imageModels: getDeploymentDefaultImageModels(),
+    videoModels: getDeploymentDefaultVideoModels(),
     textModels: [],
     defaults: DEFAULT_DEFAULTS,
   };
@@ -329,9 +417,10 @@ export function loadRegistry(): FlyreqModelRegistry {
 
     const parsed = JSON.parse(raw) as Partial<FlyreqModelRegistry>;
     const imageModels = ensureImageModels(parsed.imageModels);
+    const videoModels = ensureVideoModels(parsed.videoModels);
     const textModels = ensureTextModels(parsed.textModels);
-    const defaults = ensureDefaults(parsed.defaults, imageModels, textModels);
-    return { imageModels, textModels, defaults };
+    const defaults = ensureDefaults(parsed.defaults, imageModels, videoModels, textModels);
+    return { imageModels, videoModels, textModels, defaults };
   } catch {
     return getInitialRegistry();
   }
@@ -342,11 +431,13 @@ export function saveRegistry(registry: FlyreqModelRegistry): void {
   if (!storage) return;
 
   const imageModels = ensureImageModels(registry.imageModels);
+  const videoModels = ensureVideoModels(registry.videoModels);
   const textModels = ensureTextModels(registry.textModels);
   const normalized: FlyreqModelRegistry = {
     imageModels,
+    videoModels,
     textModels,
-    defaults: ensureDefaults(registry.defaults, imageModels, textModels),
+    defaults: ensureDefaults(registry.defaults, imageModels, videoModels, textModels),
   };
 
   storage.setItem(REGISTRY_KEY, JSON.stringify(normalized));
@@ -358,6 +449,34 @@ export function getImageModelById(registry: FlyreqModelRegistry, id: string): Im
 
 export function getTextModelById(registry: FlyreqModelRegistry, id: string): TextModelConfig | undefined {
   return registry.textModels.find((model) => model.id === id);
+}
+
+/**
+ * 按内部标识读取视频模型。
+ * @param registry 当前模型注册表。
+ * @param id 视频模型内部标识。
+ * @returns 匹配的视频模型；不存在时返回 undefined。
+ */
+export function getVideoModelById(registry: FlyreqModelRegistry, id: string): VideoModelConfig | undefined {
+  return registry.videoModels.find(model => model.id === id);
+}
+
+/**
+ * 读取视频工作台默认模型。
+ * @param registry 当前模型注册表。
+ * @returns 配置为默认值的视频模型；不存在时返回 undefined。
+ */
+export function getDefaultVideoModel(registry: FlyreqModelRegistry): VideoModelConfig | undefined {
+  return getVideoModelById(registry, registry.defaults.videoGeneration);
+}
+
+/**
+ * 返回配置完整、可用于视频生成的模型列表。
+ * @param registry 当前模型注册表。
+ * @returns 配置完整的视频模型数组。
+ */
+export function getCompleteVideoModels(registry: FlyreqModelRegistry): VideoModelConfig[] {
+  return registry.videoModels.filter(isCompleteVideoModel);
 }
 
 export function getDefaultImageModel(

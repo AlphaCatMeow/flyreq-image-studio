@@ -6,7 +6,6 @@ import { ArrowUp, ChevronDown, CloudUpload, FileText, ImagePlus, Info, Loader2, 
 import { AttachmentChips } from './AttachmentChips';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { MissingApiKeyDialog } from '@/components/MissingApiKeyDialog';
 import { QuickPromptDialog } from '@/components/QuickPromptDialog';
 import { PromptOptimizeDialog } from '@/components/PromptOptimizeDialog';
 import { AgentAssetPickerDialog, AgentTextAssetPickerDialog } from '@/components/agent/AgentAssetPickerDialog';
@@ -144,7 +143,6 @@ export function ImageGenerationWorkbench({
   const [isDragOver, setIsDragOver] = useState(false);
   const [loading, setLoading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
-  const [missingApiKeyDialogOpen, setMissingApiKeyDialogOpen] = useState(false);
   const [quickPromptOpen, setQuickPromptOpen] = useState(false);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const [textAssetPickerOpen, setTextAssetPickerOpen] = useState(false);
@@ -162,7 +160,6 @@ export function ImageGenerationWorkbench({
 
   const maxImages = MODEL_IMAGE_LIMITS[model]?.max || 1;
   const currentMode: WorkbenchMode = pendingFiles.length > 0 ? 'image-to-image' : 'text-to-image';
-  const disabledMessage = t('workbench.disabledMessage');
 
   /**
    * 合并参数条回传的配置，并在切回单图时清理不可见的逐图附加提示词。
@@ -457,14 +454,14 @@ export function ImageGenerationWorkbench({
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setIsDragOver(false);
-    if (!disabled && e.dataTransfer.files.length > 0) {
+    if (e.dataTransfer.files.length > 0) {
       void processFiles(e.dataTransfer.files);
     }
-  }, [disabled, processFiles]);
+  }, [processFiles]);
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    if (!disabled) setIsDragOver(true);
+    setIsDragOver(true);
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -476,7 +473,7 @@ export function ImageGenerationWorkbench({
 
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
-      if (disabled || loading) return;
+      if (loading) return;
       const target = e.target as HTMLElement;
       if (!formRef.current?.contains(target)) return;
       const items = e.clipboardData?.items;
@@ -495,7 +492,7 @@ export function ImageGenerationWorkbench({
     };
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
-  }, [disabled, loading, processFiles]);
+  }, [loading, processFiles]);
 
   const handleRemovePending = useCallback((id: string) => {
     setPendingFiles(prev => prev.filter(f => f.id !== id));
@@ -627,19 +624,7 @@ export function ImageGenerationWorkbench({
   return (
     <div ref={formRef} className="space-y-4">
       <div className="bg-muted/50 border border-border rounded-xl shadow-md">
-        {disabled ? (
-          <div className="flex min-h-40 flex-col items-center justify-center gap-4 px-4 py-8 text-center">
-            <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <Info className="h-5 w-5" />
-            </div>
-            <div className="max-w-md">
-              <p className="text-base font-medium text-foreground">{t('workbench.missingApiKeyTitle')}</p>
-              <p className="mt-2 text-sm text-muted-foreground">{disabledMessage}</p>
-            </div>
-            <Button onClick={() => setMissingApiKeyDialogOpen(true)}>{t('workbench.configure')}</Button>
-          </div>
-        ) : (
-          <>
+        <>
             <div className="p-4 pb-2">
               <div className="flex gap-3">
                 <div
@@ -754,6 +739,23 @@ export function ImageGenerationWorkbench({
               </div>
             )}
 
+            {disabled && (
+              <div className="mx-3 mb-2 flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2.5 sm:mx-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex min-w-0 items-start gap-2.5">
+                  <div className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <Info className="size-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-foreground">{t('workbench.imageModelRequiredTitle')}</p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{t('workbench.imageModelRequiredDescription')}</p>
+                  </div>
+                </div>
+                <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => onConfigureApiKey?.()}>
+                  {t('workbench.configureImageModel')}
+                </Button>
+              </div>
+            )}
+
             <div className="ml-auto flex w-full justify-end gap-2 px-3 pb-2 sm:w-auto sm:px-4">
               <PromptSubmissionShortcutMenu value={submissionShortcut} isSmallViewport={isSmallViewport} onValueChange={updateSubmissionShortcut} />
               <Button variant="ghost" size="icon" onClick={() => setQuickPromptOpen(true)} title={t('workbench.quickPrompt')}>
@@ -773,20 +775,14 @@ export function ImageGenerationWorkbench({
               <Button variant="outline" size="icon" onClick={handleClearDraft} disabled={!canClear} title={t('workbench.clearDraft')}>
                 <X className="w-5 h-5" />
               </Button>
-              <Button onClick={handleSubmit} disabled={!canSubmit} size="icon" title={currentMode === 'image-to-image' ? t('workbench.submitImageToImage') : t('workbench.submitTextToImage')}>
+              <Button onClick={handleSubmit} disabled={!canSubmit} size="icon" title={disabled ? t('workbench.configureImageModel') : currentMode === 'image-to-image' ? t('workbench.submitImageToImage') : t('workbench.submitTextToImage')}>
                 {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <ArrowUp className="w-5 h-5" />}
               </Button>
             </div>
           </>
-        )}
       </div>
 
       {uploadError && <p className="text-sm text-destructive">{uploadError}</p>}
-      <MissingApiKeyDialog
-        open={missingApiKeyDialogOpen}
-        onOpenChange={setMissingApiKeyDialogOpen}
-        onConfigure={() => onConfigureApiKey?.()}
-      />
       <QuickPromptDialog
         open={quickPromptOpen}
         onOpenChange={setQuickPromptOpen}

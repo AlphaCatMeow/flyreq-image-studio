@@ -6,6 +6,9 @@ const next = process.env.NODE_ENV !== 'production' ? require('next') : null;
 const Database = require('better-sqlite3');
 const sharp = require('sharp');
 const { WebSocketServer } = require('ws');
+const Busboy = require('busboy');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const { createXaiImagineRequestInit, getXaiImagineEndpoint } = require('./xai-imagine');
 
 const ENV_FILE_PATHS = [...new Set([
@@ -62,6 +65,24 @@ const DEFAULT_IMAGE_MODEL_DEPLOYMENT_CONFIG = {
   supportsAdvancedParams: true,
   supportsTemperature: false,
   streamImages: true,
+};
+const DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG = {
+  id: 'flyreq-grok-imagine-video',
+  protocol: 'openai',
+  name: 'FlyReq',
+  modelId: 'grok-imagine-video',
+  baseUrl: 'https://flyreq.com',
+};
+const DEFAULT_VIDEO_WORKSPACE_CONFIG = {
+  maxRefImages: 5,
+  maxRefVideos: 5,
+  maxRefAudios: 5,
+  resolutions: [720, 480],
+  sizes: ['1280x720', '720x1280', '1024x1024', '1792x1024', '1024x1792', 'auto'],
+  durations: [6, 10, 12, 15, 20],
+  maxReferenceVideoBytes: 104857600,
+  maxReferenceAudioBytes: 26214400,
+  maxReferenceImageBytes: 10485760,
 };
 const BUILTIN_IMAGE_PRESET_IDS = new Set([
   'gemini-2.5-flash-image', 'gemini-3-pro-image-preview', 'gemini-3.1-flash-image-preview',
@@ -400,7 +421,9 @@ const CUSTOM_IMAGE_SIZE_LIMITS = {
 const IS_DEV = process.env.NODE_ENV !== 'production';
 const STATIC_DIR = path.join(__dirname, '..', 'frontend', 'out');
 const IMAGE_DIR = process.env.FLYREQ_IMAGE_DIR || path.join(__dirname, 'flyreq-images');
+const VIDEO_DIR = process.env.FLYREQ_VIDEO_DIR || path.join(__dirname, 'flyreq-videos');
 const taskRefImages = new Map();
+const taskVideoFiles = new Map();
 
 const app = IS_DEV ? next({ dev: IS_DEV, hostname: HOSTNAME, port: PORT, dir: path.join(__dirname, '..', 'frontend') }) : null;
 const handle = app ? app.getRequestHandler() : null;
@@ -413,6 +436,8 @@ const pendingCountByApiKeyHash = new Map(); // apiKeyHash -> count
 const xaiImagineNextRequestAtByApiKeyHash = new Map(); // apiKeyHash -> next request start timestamp
 const queue = [];
 let activeCount = 0;
+const videoQueue = [];
+let activeVideoCount = 0;
 
 // ===== WebSocket subscription state =====
 const taskSubscriptions = new Map(); // WebSocket -> Set<taskId>
@@ -558,6 +583,66 @@ function resolveDefaultImageModelConfig(env = getRuntimeEnv()) {
   };
 }
 
+/**
+ * 解析逗号分隔的正整数环境变量数组。
+ * @param value 环境变量原始值。
+ * @param fallback 变量缺失或没有有效项时采用的默认数组。
+ * @returns 去重后的正整数数组。
+ */
+function parseIntegerListEnv(value, fallback) {
+  const values = String(value || '').split(',')
+    .map(item => Number(item.trim()))
+    .filter(item => Number.isInteger(item) && item > 0);
+  return values.length > 0 ? [...new Set(values)] : [...fallback];
+}
+
+/**
+ * 解析逗号分隔的视频尺寸环境变量数组。
+ * @param value 环境变量原始值。
+ * @param fallback 变量缺失或没有有效项时采用的默认数组。
+ * @returns 仅包含 auto 或宽x高格式的去重数组。
+ */
+function parseVideoSizeListEnv(value, fallback) {
+  const values = String(value || '').split(',')
+    .map(item => item.trim().toLowerCase())
+    .filter(item => item === 'auto' || /^\d+x\d+$/.test(item));
+  return values.length > 0 ? [...new Set(values)] : [...fallback];
+}
+
+/**
+ * 读取部署级首次视频模型配置，不包含 API Key。
+ * @param env 合并后的运行时环境变量对象。
+ * @returns 可安全下发给浏览器的视频模型配置。
+ */
+function resolveDefaultVideoModelConfig(env = getRuntimeEnv()) {
+  return {
+    id: String(env.FLYREQ_DEFAULT_VIDEO_MODEL_KEY || '').trim().slice(0, 120) || DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.id,
+    protocol: 'openai',
+    name: String(env.FLYREQ_DEFAULT_VIDEO_MODEL_NAME || '').trim().slice(0, 120) || DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.name,
+    modelId: String(env.FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID || '').trim().slice(0, 200) || DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.modelId,
+    baseUrl: String(env.FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL || '').trim().slice(0, 500) || DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.baseUrl,
+  };
+}
+
+/**
+ * 读取视频工作台附件上限与参数预设。
+ * @param env 合并后的运行时环境变量对象。
+ * @returns 可安全下发给浏览器并用于后端校验的视频工作台配置。
+ */
+function resolveVideoWorkspaceConfig(env = getRuntimeEnv()) {
+  return {
+    maxRefImages: parseIntegerEnv(env.FLYREQ_VIDEO_MAX_REF_IMAGES, DEFAULT_VIDEO_WORKSPACE_CONFIG.maxRefImages, { min: 1, max: 20 }),
+    maxRefVideos: parseIntegerEnv(env.FLYREQ_VIDEO_MAX_REF_VIDEOS, DEFAULT_VIDEO_WORKSPACE_CONFIG.maxRefVideos, { min: 1, max: 20 }),
+    maxRefAudios: parseIntegerEnv(env.FLYREQ_VIDEO_MAX_REF_AUDIOS, DEFAULT_VIDEO_WORKSPACE_CONFIG.maxRefAudios, { min: 1, max: 20 }),
+    resolutions: parseIntegerListEnv(env.FLYREQ_VIDEO_RESOLUTIONS, DEFAULT_VIDEO_WORKSPACE_CONFIG.resolutions),
+    sizes: parseVideoSizeListEnv(env.FLYREQ_VIDEO_SIZES, DEFAULT_VIDEO_WORKSPACE_CONFIG.sizes),
+    durations: parseIntegerListEnv(env.FLYREQ_VIDEO_DURATIONS, DEFAULT_VIDEO_WORKSPACE_CONFIG.durations),
+    maxReferenceVideoBytes: parseIntegerEnv(env.FLYREQ_VIDEO_MAX_REFERENCE_VIDEO_BYTES, DEFAULT_VIDEO_WORKSPACE_CONFIG.maxReferenceVideoBytes, { min: 1, max: 1024 * 1024 * 1024 }),
+    maxReferenceAudioBytes: parseIntegerEnv(env.FLYREQ_VIDEO_MAX_REFERENCE_AUDIO_BYTES, DEFAULT_VIDEO_WORKSPACE_CONFIG.maxReferenceAudioBytes, { min: 1, max: 512 * 1024 * 1024 }),
+    maxReferenceImageBytes: parseIntegerEnv(env.FLYREQ_VIDEO_MAX_REFERENCE_IMAGE_BYTES, DEFAULT_VIDEO_WORKSPACE_CONFIG.maxReferenceImageBytes, { min: 1, max: 100 * 1024 * 1024 }),
+  };
+}
+
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -609,6 +694,7 @@ function cleanupTaskRuntimeState(taskId) {
   }
   apiKeys.delete(taskId);
   taskRefImages.delete(taskId);
+  taskVideoFiles.delete(taskId);
   taskSources.delete(taskId);
 }
 
@@ -790,6 +876,89 @@ function saveImageToDisk(taskId, itemIndex, subIndex, imageBuffer, mimeType) {
   const filePath = path.join(IMAGE_DIR, fileName);
   fs.writeFileSync(filePath, imageBuffer);
   return { filePath, httpUrl: `/api/flyreq/images/${taskId}/${itemIndex}/${subIndex}` };
+}
+
+/**
+ * 确保视频结果目录存在，目录不可用时终止启动以避免产生不可取回任务。
+ * @returns 无返回值。
+ */
+function ensureVideoDir() {
+  try {
+    if (!fs.existsSync(VIDEO_DIR)) fs.mkdirSync(VIDEO_DIR, { recursive: true });
+    console.log(`[video-storage] 视频存储目录: ${VIDEO_DIR}`);
+  } catch (error) {
+    console.error(`[video-storage] 无法创建视频存储目录: ${VIDEO_DIR}`, error);
+    process.exit(1);
+  }
+}
+
+/**
+ * 根据响应类型选择视频扩展名。
+ * @param mimeType 上游视频响应的 MIME 类型。
+ * @returns 受支持的视频文件扩展名。
+ */
+function getVideoExtension(mimeType) {
+  if (mimeType?.includes('webm')) return 'webm';
+  if (mimeType?.includes('quicktime')) return 'mov';
+  return 'mp4';
+}
+
+/**
+ * 查找指定任务已缓存的视频文件。
+ * @param taskId 视频任务标识。
+ * @returns 视频绝对路径；不存在时返回 null。
+ */
+function findTaskVideoFile(taskId) {
+  if (!/^[a-f0-9-]+$/i.test(taskId) || !fs.existsSync(VIDEO_DIR)) return null;
+  const name = fs.readdirSync(VIDEO_DIR).find(item => item.startsWith(`${taskId}.`));
+  return name ? path.join(VIDEO_DIR, name) : null;
+}
+
+/**
+ * 删除指定任务对应的视频结果文件。
+ * @param taskId 视频任务标识。
+ * @returns 无返回值。
+ */
+function deleteTaskVideoFile(taskId) {
+  const filePath = findTaskVideoFile(taskId);
+  if (filePath) {
+    try { fs.unlinkSync(filePath); } catch { /* 文件已被清理时无需重复报错。 */ }
+  }
+}
+
+/**
+ * 通过支持 Range 的响应发送视频文件。
+ * @param req 原始 HTTP 请求，用于读取 Range 请求头。
+ * @param res 原始 HTTP 响应。
+ * @param filePath 待发送的视频绝对路径。
+ * @returns 无返回值，响应会在文件流结束后关闭。
+ */
+function sendVideoFile(req, res, filePath) {
+  const stat = fs.statSync(filePath);
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeType = ext === '.webm' ? 'video/webm' : ext === '.mov' ? 'video/quicktime' : 'video/mp4';
+  const range = String(req.headers.range || '');
+  if (!range) {
+    res.writeHead(200, { 'Content-Type': mimeType, 'Content-Length': stat.size, 'Accept-Ranges': 'bytes', 'Cache-Control': 'private, max-age=3600' });
+    fs.createReadStream(filePath).pipe(res);
+    return;
+  }
+  const match = range.match(/^bytes=(\d*)-(\d*)$/);
+  const start = match?.[1] ? Number(match[1]) : 0;
+  const end = match?.[2] ? Math.min(Number(match[2]), stat.size - 1) : stat.size - 1;
+  if (!match || start > end || start >= stat.size) {
+    res.writeHead(416, { 'Content-Range': `bytes */${stat.size}` });
+    res.end();
+    return;
+  }
+  res.writeHead(206, {
+    'Content-Type': mimeType,
+    'Content-Length': end - start + 1,
+    'Content-Range': `bytes ${start}-${end}/${stat.size}`,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'private, max-age=3600',
+  });
+  fs.createReadStream(filePath, { start, end }).pipe(res);
 }
 
 function getImageMimeType(format, fallback = 'image/png') {
@@ -1201,6 +1370,95 @@ function normalizeError(error) {
   }
   // 截断非预定义错误消息，避免泄露内部信息（文件路径、堆栈等）
   return message.length > 200 ? message.slice(0, 200) + '…' : message;
+}
+
+/**
+ * 解析视频任务 multipart 请求，并在内存中保存受限附件。
+ * @param req 原始 HTTP 请求。
+ * @returns 表单字段以及参考视频、参考音频附件。
+ */
+function readVideoMultipartBody(req) {
+  const config = resolveVideoWorkspaceConfig();
+  return new Promise((resolve, reject) => {
+    const fields = {};
+    const files = { videos: [], audios: [], images: [] };
+    let failure = null;
+    const busboy = Busboy({
+      headers: req.headers,
+      limits: {
+        fields: 20,
+        files: config.maxRefVideos + config.maxRefAudios + config.maxRefImages,
+        fileSize: Math.max(config.maxReferenceVideoBytes, config.maxReferenceAudioBytes),
+      },
+    });
+    busboy.on('field', (name, value) => { fields[name] = value; });
+    busboy.on('file', (name, stream, info) => {
+      const target = name === 'reference_videos' ? files.videos : name === 'reference_audios' ? files.audios : name === 'reference_images' ? files.images : null;
+      const expectedPrefix = name === 'reference_videos' ? 'video/' : name === 'reference_audios' ? 'audio/' : 'image/';
+      const maxBytes = name === 'reference_videos' ? config.maxReferenceVideoBytes : name === 'reference_audios' ? config.maxReferenceAudioBytes : config.maxReferenceImageBytes;
+      const chunks = [];
+      let size = 0;
+      if (!target || !String(info.mimeType || '').startsWith(expectedPrefix)) {
+        failure ||= new Error('参考附件类型无效');
+        stream.resume();
+        return;
+      }
+      stream.on('data', chunk => { size += chunk.length; chunks.push(chunk); });
+      stream.on('limit', () => { failure ||= createHttpError(413, 'PAYLOAD_TOO_LARGE', '参考附件超过大小限制'); });
+      stream.on('end', () => {
+        if (size <= maxBytes) target.push({ filename: info.filename, mimeType: info.mimeType, buffer: Buffer.concat(chunks), size });
+        else failure ||= createHttpError(413, 'PAYLOAD_TOO_LARGE', '参考附件超过大小限制');
+      });
+    });
+    busboy.on('filesLimit', () => { failure ||= new Error('参考附件数量超过限制'); });
+    busboy.on('error', reject);
+    busboy.on('finish', () => failure ? reject(failure) : resolve({ fields, files }));
+    req.pipe(busboy);
+  });
+}
+
+/**
+ * 校验并规范化视频任务字段。
+ * @param fields multipart 表单中的文本字段。
+ * @param files 已解析的参考附件。
+ * @returns 可持久化并发送给上游的任务参数。
+ */
+function normalizeVideoTaskPayload(fields, files) {
+  const config = resolveVideoWorkspaceConfig();
+  const resolution = Number(fields.resolution);
+  const seconds = Number(fields.seconds);
+  const size = String(fields.size || '').trim().toLowerCase();
+  if (!String(fields.apiKey || '').trim()) throw new Error('缺少 API 密钥');
+  if (!String(fields.baseUrl || '').trim()) throw new Error('缺少 API 基础地址');
+  if (!String(fields.model || '').trim()) throw new Error('模型名称不能为空');
+  if (!String(fields.prompt || '').trim()) throw new Error('提示词不能为空');
+  if (!Number.isInteger(resolution) || resolution < 144 || resolution > 4320) throw new Error('清晰度必须为 144 至 4320 的整数');
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60) throw new Error('秒数必须为 1 至 60 的整数');
+  if (size !== 'auto') {
+    const match = size.match(/^(\d+)x(\d+)$/);
+    const width = Number(match?.[1]);
+    const height = Number(match?.[2]);
+    if (!match || [width, height].some(side => side < 64 || side > 4096 || side % 8 !== 0)) throw new Error('视频尺寸无效');
+  }
+  if (files.videos.length > config.maxRefVideos || files.audios.length > config.maxRefAudios || files.images.length > config.maxRefImages) throw new Error('参考附件数量超过限制');
+  return {
+    mode: 'video-generation',
+    source: 'flyreq',
+    protocol: 'openai',
+    apiKey: String(fields.apiKey).trim(),
+    baseUrl: normalizeProtocolBaseUrl('openai', fields.baseUrl),
+    model: String(fields.model).trim(),
+    prompt: String(fields.prompt).trim(),
+    resolution,
+    size,
+    seconds,
+    parallelCount: 1,
+    references: {
+      videos: files.videos.map(file => ({ name: file.filename, mimeType: file.mimeType, size: file.size })),
+      audios: files.audios.map(file => ({ name: file.filename, mimeType: file.mimeType, size: file.size })),
+      images: files.images.map(file => ({ name: file.filename, mimeType: file.mimeType, size: file.size })),
+    },
+  };
 }
 
 /**
@@ -1930,6 +2188,186 @@ async function generateFlyreqGeminiImage(apiKey, request, options = {}) {
   return extractGeminiImagePayload(data);
 }
 
+/**
+ * 返回视频任务独立并发上限。
+ * @returns 1 至 20 范围内的并发数量。
+ */
+function getMaxVideoConcurrency() {
+  return parseIntegerEnv(getRuntimeEnv().FLYREQ_VIDEO_TASK_CONCURRENCY, 2, { min: 1, max: 20 });
+}
+
+/**
+ * 登记视频任务运行期密钥、附件和来源计数，并进入独立队列。
+ * @param taskId 新建的视频任务标识。
+ * @param payload 已规范化的视频任务参数。
+ * @param files 仅在运行期保留的参考附件。
+ * @param source 限流使用的请求来源。
+ * @returns 无返回值。
+ */
+function registerVideoTaskRuntimeState(taskId, payload, files, source) {
+  apiKeys.set(taskId, payload.apiKey);
+  taskVideoFiles.set(taskId, files);
+  taskSources.set(taskId, source);
+  if (source.ip) pendingCountByIp.set(source.ip, (pendingCountByIp.get(source.ip) || 0) + 1);
+  if (source.apiKeyHash) pendingCountByApiKeyHash.set(source.apiKeyHash, (pendingCountByApiKeyHash.get(source.apiKeyHash) || 0) + 1);
+  videoQueue.push(taskId);
+}
+
+/**
+ * 原子创建单个视频任务并触发独立调度器。
+ * @param payload 已规范化的视频任务参数。
+ * @param files 参考视频和参考音频附件。
+ * @param req 原始请求，用于限流来源识别。
+ * @returns 新建任务标识。
+ */
+function createVideoTask(payload, files, req) {
+  const limitConfig = getLimitConfig();
+  if (isRejectNewTasksEnabled()) throw createHttpError(503, 'SERVER_NOT_ACCEPTING_TASKS', LIMIT_ERROR_MESSAGES.notAcceptingTasks, limitConfig.retryAfterSeconds);
+  const source = enforceRateLimit(req, payload, limitConfig);
+  enforceQueueCapacity(source, limitConfig, 1);
+  const taskId = randomUUID();
+  const now = new Date().toISOString();
+  const requestForDb = { ...payload };
+  delete requestForDb.apiKey;
+  db.prepare(`INSERT INTO tasks (id, status, mode, request_json, created_at) VALUES (?, ?, ?, ?, ?)`)
+    .run(taskId, TASK_STATUS.QUEUED, 'video-generation', JSON.stringify(requestForDb), now);
+  registerVideoTaskRuntimeState(taskId, payload, files, source);
+  broadcastTask(taskId);
+  broadcastQueueStatus();
+  drainVideoQueue();
+  return taskId;
+}
+
+/**
+ * 创建上游异步视频任务。
+ * @param apiKey 视频模型 API Key。
+ * @param request 视频生成参数。
+ * @param files 参考视频和参考音频附件。
+ * @returns 上游视频任务标识。
+ */
+async function createUpstreamVideo(apiKey, request, files) {
+  const baseUrl = resolveAndLogOutboundBaseUrl('视频生成', 'openai', request.baseUrl).baseUrl;
+  const url = appendProtocolApiPath('openai', baseUrl, '/v1/videos/generations');
+  const common = {
+    model: request.model,
+    prompt: request.prompt,
+    resolution: request.resolution,
+    size: request.size,
+    seconds: request.seconds,
+  };
+  let body;
+  let headers = { Authorization: `Bearer ${apiKey}` };
+  if (files.videos.length > 0 || files.audios.length > 0 || files.images.length > 0) {
+    body = new FormData();
+    for (const [key, value] of Object.entries(common)) body.append(key, String(value));
+    for (const file of files.videos) body.append('reference_videos', new Blob([file.buffer], { type: file.mimeType }), file.filename);
+    for (const file of files.audios) body.append('reference_audios', new Blob([file.buffer], { type: file.mimeType }), file.filename);
+    for (const file of files.images) body.append('reference_images', new Blob([file.buffer], { type: file.mimeType }), file.filename);
+  } else {
+    headers = { ...headers, 'Content-Type': 'application/json' };
+    body = JSON.stringify(common);
+  }
+  const response = await fetchWithTimeout(url, { method: 'POST', headers, body });
+  const responseText = await response.text();
+  const data = parseJsonSafely(responseText);
+  if (!response.ok || !data?.id) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${data?.error || responseText || '未返回任务 ID'}`);
+  return String(data.id);
+}
+
+/**
+ * 轮询上游视频任务直到完成、失败或超时。
+ * @param apiKey 视频模型 API Key。
+ * @param request 视频生成参数。
+ * @param upstreamTaskId 上游视频任务标识。
+ * @returns 完成视频的远程 URL。
+ */
+async function pollUpstreamVideo(apiKey, request, upstreamTaskId) {
+  const env = getRuntimeEnv();
+  const intervalMs = parseIntegerEnv(env.FLYREQ_VIDEO_POLL_INTERVAL_MS, 5000, { min: 1000, max: 60000 });
+  const timeoutMs = parseIntegerEnv(env.FLYREQ_VIDEO_TIMEOUT_MS, 1800000, { min: 10000, max: 24 * 60 * 60 * 1000 });
+  const baseUrl = resolveAndLogOutboundBaseUrl('视频任务轮询', 'openai', request.baseUrl).baseUrl;
+  const url = appendProtocolApiPath('openai', baseUrl, `/v1/videos/${encodeURIComponent(upstreamTaskId)}`);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${apiKey}` } });
+    const responseText = await response.text();
+    const data = parseJsonSafely(responseText);
+    if (!response.ok || !data) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${responseText}`);
+    if (data.status === 'completed' && typeof data.url === 'string' && data.url) return data.url;
+    if (data.status === 'failed') throw new Error(String(data.error || '上游视频任务失败'));
+    await delay(intervalMs);
+  }
+  throw new Error('视频生成超时');
+}
+
+/**
+ * 将上游视频结果流式缓存到任务目录。
+ * @param taskId 本地视频任务标识。
+ * @param remoteUrl 上游完成视频 URL。
+ * @param apiKey 下载视频时使用的 API Key。
+ * @returns 站内视频播放地址。
+ */
+async function cacheVideoResult(taskId, remoteUrl, apiKey) {
+  const response = await fetchWithTimeout(remoteUrl, { headers: { Authorization: `Bearer ${apiKey}` } });
+  if (!response.ok || !response.body) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：视频下载失败`);
+  const ext = getVideoExtension(response.headers.get('content-type'));
+  const filePath = path.join(VIDEO_DIR, `${taskId}.${ext}`);
+  await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(filePath));
+  return `/api/flyreq/videos/${taskId}`;
+}
+
+/**
+ * 执行单个视频任务的创建、轮询、缓存和终态写入。
+ * @param taskId 本地视频任务标识。
+ * @returns 无返回值，任务终态写入数据库并广播。
+ */
+async function runVideoTask(taskId) {
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+  const apiKey = apiKeys.get(taskId);
+  const files = taskVideoFiles.get(taskId) || { videos: [], audios: [], images: [] };
+  if (!task || !apiKey || ![TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED].includes(task.status)) {
+    cleanupTaskRuntimeState(taskId);
+    return;
+  }
+  const request = JSON.parse(task.request_json);
+  db.prepare("UPDATE tasks SET status = 'processing' WHERE id = ?").run(taskId);
+  broadcastTask(taskId);
+  broadcastQueueStatus();
+  try {
+    const upstreamTaskId = await createUpstreamVideo(apiKey, request, files);
+    const remoteUrl = await pollUpstreamVideo(apiKey, request, upstreamTaskId);
+    const videoUrl = await cacheVideoResult(taskId, remoteUrl, apiKey);
+    const completedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+    db.prepare("UPDATE tasks SET status = 'completed', result_json = ?, completed_at = ?, expires_at = ? WHERE id = ?")
+      .run(JSON.stringify({ videoUrl, upstreamTaskId }), completedAt, expiresAt, taskId);
+  } catch (error) {
+    const completedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+    db.prepare("UPDATE tasks SET status = 'failed', error = ?, completed_at = ?, expires_at = ? WHERE id = ?")
+      .run(normalizeError(error), completedAt, expiresAt, taskId);
+  }
+  cleanupTaskRuntimeState(taskId);
+  broadcastTask(taskId);
+  broadcastQueueStatus();
+}
+
+/**
+ * 在独立并发上限内持续调度视频任务。
+ * @returns 无返回值。
+ */
+function drainVideoQueue() {
+  const maxConcurrency = getMaxVideoConcurrency();
+  while (videoQueue.length > 0 && activeVideoCount < maxConcurrency) {
+    const taskId = videoQueue.shift();
+    activeVideoCount += 1;
+    runVideoTask(taskId).finally(() => {
+      activeVideoCount -= 1;
+      drainVideoQueue();
+    });
+  }
+}
+
 function drainQueue() {
   const maxConcurrency = getMaxServerConcurrency();
   while (queue.length > 0) {
@@ -2108,6 +2546,7 @@ function serializeTask(task) {
 
 function deleteTask(taskId) {
   deleteTaskImageFiles(taskId);
+  deleteTaskVideoFile(taskId);
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM task_items WHERE task_id = ?').run(taskId);
     db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId);
@@ -2368,6 +2807,8 @@ async function handleApi(req, res, pathname) {
           imageModelKeyGuide: resolveImageModelKeyGuide(env),
           imagePresetModelIds: resolveImagePresetModelIds(env),
           defaultImageModel: resolveDefaultImageModelConfig(env),
+          defaultVideoModel: resolveDefaultVideoModelConfig(env),
+          videoWorkspace: resolveVideoWorkspaceConfig(env),
           branding: resolvePlatformBranding(env),
         },
         {
@@ -2437,6 +2878,17 @@ async function handleApi(req, res, pathname) {
       } catch {
         sendJson(res, 404, { error: 'Not Found' });
       }
+      return true;
+    }
+
+    const videoFileMatch = apiPathname.match(/^\/api\/flyreq\/videos\/([^/]+)$/);
+    if (req.method === 'GET' && videoFileMatch) {
+      const filePath = findTaskVideoFile(videoFileMatch[1]);
+      if (!filePath) {
+        sendJson(res, 404, { error: 'Not Found' });
+        return true;
+      }
+      sendVideoFile(req, res, filePath);
       return true;
     }
 
@@ -2555,6 +3007,33 @@ async function handleApi(req, res, pathname) {
     }
 
     // 批量创建端点：请求体包含公共参数和 parallelCount，响应按图片序号返回独立 taskIds。
+    if (req.method === 'POST' && apiPathname === '/api/flyreq/video-tasks') {
+      const { fields, files } = await readVideoMultipartBody(req);
+      const payload = normalizeVideoTaskPayload(fields, files);
+      const taskId = createVideoTask(payload, files, req);
+      sendJson(res, 202, { taskId });
+      return true;
+    }
+
+    const videoTaskMatch = apiPathname.match(/^\/api\/flyreq\/video-tasks\/([^/]+)(?:\/(ack))?$/);
+    if (videoTaskMatch) {
+      const taskId = decodeURIComponent(videoTaskMatch[1]);
+      const action = videoTaskMatch[2];
+      if (req.method === 'GET' && !action) {
+        const task = serializeTask(db.prepare('SELECT * FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation'));
+        sendJson(res, task ? 200 : 404, task || { id: taskId, status: 'expired', error: '该任务已超出取回时间' });
+        return true;
+      }
+      if (req.method === 'POST' && action === 'ack') {
+        const existing = db.prepare('SELECT id FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation');
+        if (existing) db.prepare('UPDATE tasks SET expires_at = ? WHERE id = ?').run(new Date(Date.now() + 120000).toISOString(), taskId);
+        sendJson(res, 200, { ok: true });
+        return true;
+      }
+      sendJson(res, 405, { error: 'Method Not Allowed' });
+      return true;
+    }
+
     if (req.method === 'POST' && apiPathname === '/api/flyreq/tasks/batch') {
       const body = await readJsonBody(req);
       const taskIds = createTaskBatch(body, req);
@@ -2608,6 +3087,7 @@ async function handleApi(req, res, pathname) {
 
 initDatabase();
 ensureImageDir();
+ensureVideoDir();
 logBaseUrlRewriteConfiguration();
 cleanupExpiredTasks();
 setInterval(cleanupExpiredTasks, CLEANUP_INTERVAL_MS).unref();
