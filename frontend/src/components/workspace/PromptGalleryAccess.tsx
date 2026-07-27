@@ -1,8 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ConfirmDialog } from '@/components/workspace/dialogs/ConfirmDialog';
 import type { PromptGalleryMode } from '@/hooks/usePromptGalleryConfig';
 import { translate, type Locale } from '@/lib/i18n';
 
+/**
+ * 管理提示词广场的显示权限与密码验证状态。
+ * @param mode 提示词广场部署模式。
+ * @param passwordEnabled 是否启用访问密码。
+ * @param onError 错误消息回调。
+ * @param onUnlocked 解锁成功后的导航回调。
+ * @param locale 当前界面语言。
+ * @returns 提示词广场可见状态、验证框状态和访问操作方法。
+ */
 export function usePromptGalleryAccess(
   mode: PromptGalleryMode,
   passwordEnabled: boolean,
@@ -13,8 +22,6 @@ export function usePromptGalleryAccess(
   const [showPromptGallery, setShowPromptGallery] = useState(mode === '1');
   const [passwordDialogOpen, setPasswordDialogOpen] = useState(false);
   const [passwordInput, setPasswordInput] = useState('');
-  const [, setClickCount] = useState(0);
-  const clickTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     if (mode === '2') return;
@@ -32,20 +39,11 @@ export function usePromptGalleryAccess(
       onUnlocked?.();
       return;
     }
-    if (showPromptGallery) return;
-
-    setClickCount((prev) => {
-      const next = prev + 1;
-      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-      if (next >= 7) {
-        setPasswordDialogOpen(true);
-        return 0;
-      }
-      clickTimerRef.current = setTimeout(() => {
-        setClickCount(0);
-      }, 2000);
-      return next;
-    });
+    if (showPromptGallery) {
+      onUnlocked?.();
+      return;
+    }
+    setPasswordDialogOpen(true);
   }, [mode, onUnlocked, passwordEnabled, showPromptGallery]);
 
   const handlePasswordSubmit = useCallback(async () => {
@@ -70,12 +68,6 @@ export function usePromptGalleryAccess(
     }
   }, [locale, onError, onUnlocked, passwordInput]);
 
-  useEffect(() => {
-    return () => {
-      if (clickTimerRef.current) clearTimeout(clickTimerRef.current);
-    };
-  }, []);
-
   return {
     showPromptGallery,
     passwordDialogOpen,
@@ -87,6 +79,11 @@ export function usePromptGalleryAccess(
   };
 }
 
+/**
+ * 渲染提示词广场密码验证对话框。
+ * @param props 对话框状态、密码值和提交回调。
+ * @returns 打开时返回验证对话框，关闭时返回空内容。
+ */
 export function PromptGalleryAccessDialog({
   open,
   passwordInput,

@@ -3,8 +3,10 @@ import type { GptImageBackground, GptImageOutputFormat, GptImageQuality, GptImag
 import {
   getCompleteImageModels,
   getCompleteTextModels,
+  getCompleteVideoModels,
   getImageModelById,
   getResolvedImageModelId,
+  getResolvedVideoModelId,
   getTextModelById,
   loadRegistry,
   getImageApiFlavor,
@@ -248,6 +250,7 @@ export async function checkModelsAvailability(
     const registry = loadRegistry();
     const completeImageModels = getCompleteImageModels(registry);
     const completeTextModels = getCompleteTextModels(registry);
+    const completeVideoModels = getCompleteVideoModels(registry);
     const configuredModels = [
       ...completeImageModels.map((model) => ({
         id: model.id,
@@ -264,6 +267,14 @@ export async function checkModelsAvailability(
         baseUrl: model.baseUrl,
         apiKey: model.apiKey,
         modelId: model.modelId,
+      })),
+      ...completeVideoModels.map((model) => ({
+        id: model.id,
+        name: model.name,
+        protocol: model.protocol,
+        baseUrl: model.baseUrl,
+        apiKey: model.apiKey,
+        modelId: getResolvedVideoModelId(model),
       })),
     ];
 

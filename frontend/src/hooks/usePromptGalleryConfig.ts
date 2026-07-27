@@ -4,9 +4,12 @@ import { useEffect, useState } from 'react';
 import {
   applyBuiltinImagePresetModelIds,
   applyDeploymentDefaultImageModel,
+  applyDeploymentDefaultVideoModel,
   type BuiltinImagePresetModelIds,
   type DeploymentDefaultImageModelConfig,
+  type DeploymentDefaultVideoModelConfig,
 } from '@/lib/flyreq-models';
+import { applyVideoWorkspaceConfig, type VideoWorkspaceConfig } from '@/lib/video-config';
 
 // 1 = 常驻（直接显示） 2 = 私密（需密码） 3 = 关闭（完全隐藏）
 export type PromptGalleryMode = '1' | '2' | '3';
@@ -30,10 +33,14 @@ export function usePromptGalleryConfig() {
         promptGalleryPasswordEnabled?: boolean;
         imagePresetModelIds?: BuiltinImagePresetModelIds;
         defaultImageModel?: DeploymentDefaultImageModelConfig;
+        defaultVideoModel?: DeploymentDefaultVideoModelConfig;
+        videoWorkspace?: VideoWorkspaceConfig;
       }) => {
         if (cancelled) return;
         applyBuiltinImagePresetModelIds(data.imagePresetModelIds);
         applyDeploymentDefaultImageModel(data.defaultImageModel);
+        applyDeploymentDefaultVideoModel(data.defaultVideoModel);
+        applyVideoWorkspaceConfig(data.videoWorkspace);
         const raw = data.promptGalleryMode;
         setMode(raw === '1' || raw === '3' ? raw : '2');
         setPasswordEnabled(Boolean(data.promptGalleryPasswordEnabled));
@@ -41,6 +48,8 @@ export function usePromptGalleryConfig() {
       .catch(() => {
         applyBuiltinImagePresetModelIds();
         applyDeploymentDefaultImageModel();
+        applyDeploymentDefaultVideoModel();
+        applyVideoWorkspaceConfig();
       })
       .finally(() => {
         if (!cancelled) setReady(true);

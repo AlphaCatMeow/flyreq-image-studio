@@ -40,12 +40,11 @@ FlyReq Image Studio（简称 FlyReq Image）是一个面向个人/团队的 AI �
 - **模型不绑定平台**：图片模型与文本模型分别配置，每个模型独立保存 API Key、Base URL、协议和能力边界
 - **模型能力按需呈现**：根据内置预设或自定义能力，自动显示参考图数量、分辨率、temperature、透明背景、质量、风格和输出格式
 - **面向生产部署**：支持部署级首次图片模型、平台名称/Logo/Icon、任务并发和限流配置；已有用户的本地模型配置不会被覆盖
-- **外部链接一键预填模型**：模型供应商或团队门户可通过 URL 带入图片模型协议、模型 ID、Base URL 和能力配置；页面自动打开设置，用户确认后才保存
+- **外部链接一键预填模型**：模型供应商或团队门户可通过 URL 带入图片、文本或视频模型配置；页面自动打开设置，用户确认后才保存
 - **长任务稳定性**：OpenAI Images 兼容接口可启用流式图片请求；支持将公网 Base URL 定向到 Docker 内网，避免反向代理和 Cloudflare 长连接超时
 - **可排查的失败信息**：明确区分上游服务错误并保留原始响应；遇到 504 会提示再次重试
 - **本地优先体验**：模型与工作区配置保存于浏览器 localStorage，历史任务、图片素材与配置可一键备份和恢复
 
-> 当前版本：**v1.5.1**
 
 ## 💎 赞助商
 
@@ -158,15 +157,17 @@ FlyReq Image 采用**用户自定义模型**架构：
 #### 与众不同的工作流能力
 
 - **Agent 按意图选模型**：Agent 会结合用户指定的分辨率、当前可用模型和参考图比例，选择能满足要求且规格合适的图片模型，并把布局参数归一化为该模型支持的范围。
-- **一处配置，多处生效**：外部系统可通过 URL 预填图片模型配置，并要求用户确认后才保存；部署者可通过环境变量为新用户提供首个默认图片模型、品牌名称、Logo 和浏览器图标。
+- **一处配置，多处生效**：外部系统可通过 URL 预填图片、文本或视频模型，并要求用户确认后才保存；部署者可通过环境变量为新用户提供首个默认图片模型、品牌名称、Logo 和浏览器图标。
 - **上游兼容与诊断并存**：服务端可以把用户填写的公网 Base URL 改写为容器内网地址，同时保留用户原始配置；上游返回错误时保留原始内容并标注来源。
 - **任务结果可恢复**：任务经 SQLite 队列持久化，WebSocket 实时同步状态，断线后自动重连并回退轮询；图片落盘保存，历史任务可重试、下载、备份和恢复。
 
 ### 外部链接预填模型配置
 
-外部站点可以跳转到 FlyReq Image，并通过 URL 预填图片模型配置。页面会自动打开“设置”，把参数填入模型表单，然后立即清理地址栏中的配置参数。用户确认后仍需手动点击“保存设置”，不会自动写入 `localStorage`。
+外部站点可以通过 URL 预填一个图片、文本或视频模型。页面会自动打开“设置”，把参数填入对应模型表单，然后立即清理地址栏中的全部配置参数。用户确认后仍需手动保存，外链导入不会自动写入 `localStorage`。
 
-URL 只需要一个 `provider` 参数，内容是 JSON 字符串。支持裸 JSON，也支持 URL 编码后的 JSON；生产接入时推荐 URL 编码，避免特殊字符被浏览器、代理或聊天工具改写。
+URL 只需要一个 `provider` 参数，内容是 JSON 字符串。下面使用裸 JSON 方便阅读；生产接入必须使用 `encodeURIComponent(JSON.stringify(payload))` 生成 URL 编码值，避免特殊字符被浏览器、代理或聊天工具改写。
+
+#### 图片模型示例
 
 ```json
 {
@@ -185,38 +186,81 @@ URL 只需要一个 `provider` 参数，内容是 JSON 字符串。支持裸 JSO
 }
 ```
 
-示例链接：
-
-裸 JSON：
+URL编码JSON:
+```text
+https://image.flyreq.com/zh/?provider=%7B%22type%22%3A%22image%22%2C%22preset%22%3A%22gpt-image-2%22%2C%22provider%22%3A%22openai%22%2C%22modelKey%22%3A%22flyreq-gpt-image-2%22%2C%22name%22%3A%22FlyReq%22%2C%22modelId%22%3A%22gpt-image-2%22%2C%22baseUrl%22%3A%22https%3A%2F%2Fflyreq.com%22%2C%22apiKey%22%3A%22YOUR_API_KEY%22%2C%22maxRefImages%22%3A16%2C%22maxOutputSize%22%3A%224K%22%7D
+```
 
 ```text
 https://image.flyreq.com/zh/?provider={"type":"image","preset":"gpt-image-2","provider":"openai","modelKey":"flyreq-gpt-image-2","name":"FlyReq","modelId":"gpt-image-2","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","maxRefImages":16,"maxOutputSize":"4K"}
 ```
 
-URL 编码：
+配置完整时，图片模型会成为文生图和图生图默认模型。
 
-```text
-https://image.flyreq.com/zh/?provider=%7B%22type%22%3A%22image%22%2C%22preset%22%3A%22gpt-image-2%22%2C%22provider%22%3A%22openai%22%2C%22modelKey%22%3A%22flyreq-gpt-image-2%22%2C%22name%22%3A%22FlyReq%22%2C%22modelId%22%3A%22gpt-image-2%22%2C%22baseUrl%22%3A%22https%3A%2F%2Fflyreq.com%22%2C%22apiKey%22%3A%22YOUR_API_KEY%22%2C%22maxRefImages%22%3A16%2C%22maxOutputSize%22%3A%224K%22%7D
+#### 文本模型示例
+
+```json
+{
+  "type": "text",
+  "provider": "openai",
+  "modelKey": "flyreq-text-default",
+  "name": "FlyReq Text",
+  "modelId": "gpt-5.4-mini",
+  "baseUrl": "https://flyreq.com",
+  "apiKey": "YOUR_API_KEY",
+  "note": "OpenAI Responses 兼容文本模型"
+}
 ```
 
-JSON 字段：
+```text
+https://image.flyreq.com/zh/?provider={"type":"text","provider":"openai","modelKey":"flyreq-text-default","name":"FlyReq Text","modelId":"gpt-5.4-mini","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","note":"OpenAI Responses 兼容文本模型"}
+```
+
+配置完整时，文本模型会成为 Agent、反推提示词、提示词优化和图片描述的初始默认模型；用户保存前可以分别调整。文本模型支持 `openai` 和 `google`。
+
+#### 视频模型示例
+
+```json
+{
+  "type": "video",
+  "provider": "openai",
+  "modelKey": "flyreq-video-default",
+  "name": "FlyReq Video",
+  "modelId": "grok-imagine-video",
+  "baseUrl": "https://flyreq.com",
+  "apiKey": "YOUR_API_KEY"
+}
+```
+
+```text
+https://image.flyreq.com/zh/?provider={"type":"video","provider":"openai","modelKey":"flyreq-video-default","name":"FlyReq Video","modelId":"grok-imagine-video","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY"}
+```
+
+配置完整时，视频模型会成为视频生成默认模型。视频外链只接受 OpenAI 兼容异步视频协议。
+
+视频上游创建、轮询或结果下载失败时，服务端会输出 `[video-upstream]` 结构化日志，包含请求阶段、脱敏 URL、HTTP 状态、请求追踪 ID 和上游原始响应体，不包含 API Key。单条响应默认最多记录 65536 字符，可通过 `FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS` 调整。
+
+#### 字段与行为
 
 | 字段 | 说明 |
 | --- | --- |
-| `type=image` | 当前支持图片模型 |
+| `type` | 模型类型：`image`、`text` 或 `video`；省略时为兼容旧链接默认使用 `image` |
 | `modelKey` | 可选，稳定模型 ID；存在同 ID 时更新该模型 |
-| `preset` | 可选，内置模板，如 `gpt-image-2` |
-| `provider` | 可选，`openai` 或 `google` |
+| `provider` / `protocol` | 图片、文本支持 `openai` 或 `google`；视频只支持 `openai` |
 | `name` | 显示名称 |
 | `modelId` | 上游模型 ID |
 | `baseUrl` | 上游 Base URL |
 | `apiKey` | API Key |
-| `maxRefImages` | 最大参考图数量 |
-| `maxOutputSize` | 最大分辨率：`512`、`1K`、`2K`、`4K` |
-| `supportsTemperature` | 可选，仅 Google 图片协议有效；为 `true` 时显示并发送 `temperature` 参数 |
-| `streamImages` | 可选，仅 OpenAI Images 协议有效；为 `true` 时发送流式图片请求 |
+| `preset` | 仅图片模型，可选内置模板，如 `gpt-image-2` |
+| `maxRefImages` | 仅图片模型，最大参考图数量 |
+| `maxOutputSize` | 仅图片模型：`512`、`1K`、`2K`、`4K` |
+| `supportsTemperature` | 仅图片模型，上游兼容时允许发送 Gemini `temperature` |
+| `streamImages` | 仅图片模型，启用 OpenAI Images 兼容流式请求 |
+| `note` | 仅文本模型，可选的协议或部署说明 |
 
-匹配规则：优先按 `modelKey` 更新已有模型；没有 `modelKey` 时，按 `name + modelId + baseUrl` 匹配；仍未匹配则新增模型。配置完整时会同时设为文生图和图生图默认模型。注意：`apiKey` 会短暂出现在浏览器地址栏中，FlyReq Image 会在读取后立即清理 URL。
+匹配规则：优先按 `modelKey` 更新已有模型；没有 `modelKey` 时，按 `name + modelId + baseUrl` 匹配；仍未匹配则新增草稿。不完整配置会作为未激活草稿保留，用户可以补齐后保存。旧版 `configureModel=1&type=...` 多参数链接仍支持三种类型，识别后会删除所有配置参数。
+
+安全提示：应用清理 URL 前，API Key 仍可能短暂出现在浏览器历史、代理日志、聊天预览和 Referer 信息中。推荐使用短期 Key，或在外链中省略 `apiKey`，让用户在本地填写。
 
 ### 任务系统
 
@@ -582,8 +626,11 @@ docker push ghcr.io/doudou770/flyreq-image-studio:latest
 | `FLYREQ_BASE_URL_REWRITE_MAP` | 否 | 空 | Base URL 出站改写表；例如 `{"https://flyreq.com":"http://new-api:3000"}` |
 | `FLYREQ_OUTBOUND_USER_AGENT` | 否 | `FlyReq-Image-Studio/1.5.1` | 上游请求携带的稳定服务标识；请配置为部署方可追溯的产品名称，不要伪造浏览器或第三方服务身份 |
 | `FLYREQ_PLATFORM_NAME` | 否 | `FlyReq Image` | 平台名称；用于页面标题、Header、设置页和 PWA 名称 |
-| `FLYREQ_PLATFORM_LOGO_URL` | 否 | `/favicon.png` | Header Logo 地址；仅允许站内绝对路径或 HTTP(S) URL |
-| `FLYREQ_PLATFORM_ICON_URL` | 否 | `/favicon.png` | 浏览器 favicon 与 PWA 图标地址；仅允许站内绝对路径或 HTTP(S) URL |
+| `FLYREQ_PLATFORM_LOGO_URL` | 否 | `/favicon.png` | Header Logo；建议正方形且至少 `128x128`，支持 PNG/WebP/SVG |
+| `FLYREQ_PLATFORM_ICON_URL` | 否 | `/favicon.png` | 浏览器 favicon；建议使用 `48x48` PNG 或 ICO，不作为 PWA 安装图标 |
+| `FLYREQ_PWA_ICON_192_URL` | 否 | `/icon-192.png` | PWA 普通图标；必须为 `192x192` PNG |
+| `FLYREQ_PWA_ICON_512_URL` | 否 | `/icon-512.png` | PWA 高清普通图标；必须为 `512x512` PNG |
+| `FLYREQ_PWA_MASKABLE_ICON_512_URL` | 否 | `/icon-maskable-512.png` | PWA Maskable 图标；必须为 `512x512` PNG，重要内容放在中心 80% 安全区域 |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_TITLE` | 否 | `还没有图片模型 API Key？` | 设置页图片模型 Key 指引标题 |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_DESCRIPTION` | 否 | FlyReq 默认说明 | 设置页图片模型 Key 指引描述 |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_CTA_LABEL` | 否 | `前往 flyreq.com` | 设置页图片模型 Key 指引按钮文字 |

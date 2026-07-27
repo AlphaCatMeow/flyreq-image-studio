@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Tabs, TabsContent } from '@/components/ui/tabs';
 import { ImageGenerationWorkbench } from '@/components/ImageGenerationWorkbench';
+import { VideoGenerationWorkspace } from '@/components/VideoGenerationWorkspace';
 import { ReversePromptForm } from '@/components/ReversePromptForm';
 import { GifGenerationWorkspace } from '@/components/GifGenerationWorkspace';
 import { AgentChatWorkspace } from '@/components/agent/AgentChatWorkspace';
@@ -14,6 +15,7 @@ import { SettingsModal } from '@/components/SettingsModal';
 import { MissingApiKeyDialog } from '@/components/MissingApiKeyDialog';
 import { useQueueStatus } from '@/hooks/useQueueStatus';
 import { useWideMode } from '@/hooks/useWideMode';
+import { useNavigationSidebar } from '@/hooks/useNavigationSidebar';
 import { useServerTaskPolling } from '@/hooks/useServerTaskPolling';
 import { useWorkspaceJobs } from '@/hooks/useWorkspaceJobs';
 import { WorkspaceHeader, type WorkspaceHeaderRef } from '@/components/workspace/WorkspaceHeader';
@@ -23,17 +25,7 @@ import { PromptGalleryAccessDialog, usePromptGalleryAccess } from '@/components/
 import { usePromptGalleryConfig } from '@/hooks/usePromptGalleryConfig';
 import { ConfirmDialog } from '@/components/workspace/dialogs/ConfirmDialog';
 import { Toast, type ToastData } from '@/components/workspace/Toast';
-import { Button, buttonVariants } from '@/components/ui/button';
-import { ThemeToggle } from '@/components/ThemeToggle';
-import { LanguageToggle } from '@/components/LanguageToggle';
 import { useI18n } from '@/components/LanguageProvider';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Shuffle, Settings, User, Wallpaper, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { getFlyreqTask } from '@/lib/flyreq-task-client';
 import { finalizeCompletedServerTask, getTaskSseMetadata } from '@/lib/workspace-task-service';
 import { classifyTaskFailure } from '@/lib/task-failure';
@@ -45,25 +37,19 @@ import {
   type SubmitActions,
 } from '@/lib/workspace-task-service';
 import { cn } from '@/lib/utils';
-import { BA_RANDOM_URL, BING_WALLPAPER_URL } from '@/lib/constants';
 import { getCleanUrlAfterExternalModelConfig, parseExternalModelConfig, type ExternalModelConfig } from '@/lib/external-model-config';
 
 export function WorkspaceShell() {
   const { locale, t } = useI18n();
   const queueStatus = useQueueStatus();
-  const processingSlots = queueStatus?.processingSlots ?? queueStatus?.processingCount ?? 0;
-  const queuedSlots = queueStatus?.queuedSlots ?? queueStatus?.queuedCount ?? 0;
-  const pendingSlots = queueStatus?.pendingSlots ?? (
-    typeof processingSlots === 'number' && typeof queuedSlots === 'number'
-      ? processingSlots + queuedSlots
-      : undefined
-  );
   const { wideMode, toggleWideMode } = useWideMode();
+  const { collapsed: navigationCollapsed, toggleCollapsed: toggleNavigationCollapsed } = useNavigationSidebar();
+  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [externalModelConfig, setExternalModelConfig] = useState<ExternalModelConfig | null>(null);
   const [missingApiKeyDialogOpen, setMissingApiKeyDialogOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'image-generation' | 'agent' | 'canvas' | 'assets' | 'reverse-prompt' | 'gif' | 'prompt-gallery'>('agent');
+  const [activeTab, setActiveTab] = useState<'image-generation' | 'video-generation' | 'agent' | 'canvas' | 'assets' | 'reverse-prompt' | 'gif' | 'prompt-gallery'>('image-generation');
   const [generationHistoryFilter, setGenerationHistoryFilter] = useState<GenerationHistoryFilter>('all');
   const [generationClearScope, setGenerationClearScope] = useState<HistoryClearScope | null>(null);
   const [referenceDraft, setReferenceDraft] = useState<{ id: number; refImages: RefImageData[]; prompt?: string } | null>(null);
@@ -250,23 +236,16 @@ export function WorkspaceShell() {
   return (
     <div
       className={cn(
-        'mx-auto flex min-h-screen w-full flex-col gap-4 overflow-x-hidden px-3 py-3 transition-[max-width] duration-200 sm:gap-5 sm:px-6 sm:py-5 lg:px-8',
-        wideMode ? 'max-w-none xl:h-dvh xl:min-h-0 xl:gap-3 xl:py-3 xl:overflow-hidden' : 'max-w-5xl',
-        !wideMode && activeTab === 'agent' && 'h-dvh min-h-0 overflow-hidden'
+        'mx-auto flex min-h-screen w-full flex-col gap-4 overflow-x-hidden px-3 py-3 transition-[max-width] duration-200 sm:gap-5 sm:px-6 sm:py-5 lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:px-8',
+        wideMode ? 'max-w-none xl:h-dvh xl:min-h-0 xl:gap-3 xl:py-3 xl:overflow-hidden' : 'max-w-[1440px]'
       )}
     >
       <div className={cn(
-        'flex-1 bg-transparent shadow-none sm:rounded-3xl sm:bg-card/95 sm:shadow-sm sm:border sm:border-border/70',
-        wideMode && 'flex min-h-0 flex-col',
-        !wideMode && activeTab === 'agent' && 'flex min-h-0 flex-col'
+        'flex min-h-0 flex-1 flex-col bg-transparent shadow-none sm:rounded-3xl sm:border sm:border-border/70 sm:bg-card/95 sm:shadow-sm'
       )}>
         <div className={cn(
-          'p-0 sm:p-5',
-          wideMode
-            ? 'flex h-full flex-1 flex-col min-h-0 sm:p-3'
-            : activeTab === 'agent'
-              ? 'flex h-full flex-1 flex-col min-h-0 gap-4'
-              : 'space-y-4'
+          'flex min-h-0 flex-1 flex-col gap-4 p-0 sm:p-5',
+          wideMode && 'h-full sm:p-3'
         )}>
           <WorkspaceHeader
             ref={headerRef}
@@ -275,125 +254,38 @@ export function WorkspaceShell() {
             onToggleWideMode={toggleWideMode}
             onOpenSettings={() => setSettingsOpen(true)}
             onLogoClick={promptGallery.handlePromptGalleryEntry}
-            sidebarMode={wideMode}
+            onOpenNavigation={() => setMobileNavigationOpen(true)}
+            sidebarMode
           />
 
           <Tabs
             value={activeTab}
             onValueChange={value => setActiveTab(value as typeof activeTab)}
-            orientation={wideMode ? 'vertical' : 'horizontal'}
-            className={cn(
-              wideMode
-                ? 'gap-4 xl:flex-row xl:flex-1 xl:min-h-0'
-                : activeTab === 'agent'
-                  ? 'gap-2 flex flex-col flex-1 min-h-0'
-                  : 'gap-2'
-            )}
+            orientation="vertical"
+            className="relative min-h-0 flex-1 gap-3 lg:flex-row"
           >
-            <div className={cn('flex flex-col', wideMode && 'self-stretch sticky top-4 h-full xl:shrink-0')}>
-              {wideMode && (
-                <button
-                  type="button"
-                  onClick={promptGallery.handlePromptGalleryEntry}
-                  className="flex items-center gap-2 px-2 pt-3 pb-1 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  aria-label="FlyReq Image logo"
-                >
-                  <img
-                    src="/favicon.png"
-                    alt="FlyReq Image"
-                    className="h-8 w-8 shrink-0 rounded-lg object-cover ring-1 ring-border/60"
-                  />
-                  <div className="min-w-0">
-                    <h2 className="truncate text-base font-semibold tracking-tight leading-tight">FlyReq Image</h2>
-                    <p className="truncate text-[11px] text-muted-foreground leading-tight">{t('app.subtitle')}</p>
-                  </div>
-                </button>
-              )}
-              <div className={cn(wideMode ? 'flex flex-col py-4 flex-1' : 'flex flex-col py-1')}>
-                <WorkspaceModeTabs wideMode={wideMode} showPromptGallery={promptGallery.showPromptGallery} />
-              </div>
-
-              {wideMode && (
-                <div className="hidden flex-col gap-1 xl:flex xl:min-h-0">
-                  <div className="flex flex-col gap-1">
-                    <DropdownMenu modal={false}>
-                      <DropdownMenuTrigger
-                        className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'w-full justify-start gap-2 rounded-xl px-3 text-xs')}
-                        title={t('toolbar.randomImage')}
-                        aria-label={t('toolbar.randomImage')}
-                      >
-                        <Shuffle className="size-4 shrink-0" />
-                        {t('toolbar.randomImage')}
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start" sideOffset={4}>
-                        <DropdownMenuItem onClick={() => headerRef.current?.openRandomImage(BA_RANDOM_URL, t('toolbar.baPeople'))}>
-                          <User className="w-4 h-4" />
-                          {t('toolbar.baPeople')}
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => headerRef.current?.openRandomImage(BING_WALLPAPER_URL, t('toolbar.bingWallpaper'))}>
-                          <Wallpaper className="w-4 h-4" />
-                          {t('toolbar.bingWallpaper')}
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <Button variant="outline" size="sm" className="w-full justify-start gap-2 rounded-xl px-3 text-xs" onClick={toggleWideMode}>
-                      {wideMode ? <PanelLeftClose className="size-4 shrink-0" /> : <PanelLeftOpen className="size-4 shrink-0" />}
-                      {wideMode ? t('toolbar.exitWideMode') : t('toolbar.wideMode')}
-                    </Button>
-                  </div>
-
-                  <div className="flex flex-col gap-1">
-                    <div className="h-px bg-border" />
-                    {queueStatus ? (
-                      <div className="flex flex-col gap-1">
-                        <span className="rounded-full bg-muted px-3 py-1 text-center text-xs text-muted-foreground">
-                          {t('queue.concurrency', { count: processingSlots })}
-                        </span>
-                        <span className={cn(
-                          'rounded-full px-3 py-1 text-center text-xs',
-                          typeof pendingSlots === 'number' && typeof queueStatus.maxQueueSize === 'number' && pendingSlots >= queueStatus.maxQueueSize
-                            ? 'bg-destructive/10 text-destructive'
-                            : 'bg-muted text-muted-foreground'
-                        )}>
-                          {typeof pendingSlots === 'number' && typeof queueStatus.maxQueueSize === 'number'
-                            ? t('queue.capacity', { count: pendingSlots, max: queueStatus.maxQueueSize })
-                            : t('queue.queued', { count: queuedSlots })}
-                        </span>
-                        <span className="rounded-full bg-muted px-3 py-1 text-center text-xs text-muted-foreground">
-                          {t('queue.status', { status: queueStatus.acceptingNewTasks ? t('queue.statusOpen') : t('queue.statusClosed') })}
-                        </span>
-                        {queueStatus.serverMessage && (
-                          <span className="rounded-xl bg-destructive/10 px-3 py-1 text-center text-xs text-destructive">
-                            {queueStatus.serverMessage}
-                          </span>
-                        )}
-                      </div>
-                    ) : (
-                      <span className="text-center text-xs text-muted-foreground">{t('queue.unknown')}</span>
-                    )}
-                  </div>
-                  <div className="mt-auto flex flex-col gap-1 pt-3">
-                    <div className="h-px bg-border" />
-                    <div className="grid grid-cols-3 gap-0.5 rounded-xl border border-border bg-background p-0.5 shadow-sm dark:border-input dark:bg-input/20">
-                      <ThemeToggle iconOnly />
-                      <LanguageToggle iconOnly />
-                      <Button variant="ghost" size="icon-sm" className="w-full rounded-lg" onClick={() => setSettingsOpen(true)} title={t('common.settings')} aria-label={t('common.settings')}>
-                        <Settings className="size-4 shrink-0" />
-                      </Button>
-                    </div>
-                  </div>
-                </div>)}
-            </div>
+            <WorkspaceModeTabs
+              activeTab={activeTab}
+              collapsed={navigationCollapsed}
+              mobileOpen={mobileNavigationOpen}
+              wideMode={wideMode}
+              queueStatus={queueStatus}
+              showPromptGalleryEntry={galleryConfig.mode !== '3'}
+              onMobileOpenChange={setMobileNavigationOpen}
+              onToggleCollapsed={toggleNavigationCollapsed}
+              onToggleWideMode={toggleWideMode}
+              onOpenSettings={() => setSettingsOpen(true)}
+              onOpenPromptGallery={promptGallery.handlePromptGalleryEntry}
+              onOpenRandomImage={(url, title) => headerRef.current?.openRandomImage(url, title)}
+            />
 
             <div className={cn(
+              'flex min-w-0 flex-1 flex-col lg:min-h-0',
+              !wideMode && (activeTab === 'agent' ? 'lg:overflow-hidden' : 'lg:overflow-x-hidden lg:overflow-y-auto'),
               wideMode && 'xl:flex xl:flex-1 xl:min-h-0 xl:min-w-0',
-              wideMode && (activeTab === 'image-generation' || activeTab === 'agent'
+              wideMode && (activeTab === 'image-generation' || activeTab === 'video-generation' || activeTab === 'agent'
                 ? 'xl:overflow-hidden'
-                : 'xl:overflow-y-auto xl:overflow-x-hidden'),
-              !wideMode && activeTab === 'agent' && 'flex flex-1 flex-col min-h-0'
+                : 'xl:overflow-y-auto xl:overflow-x-hidden')
             )}>
               <TabsContent value="image-generation" keepMounted className={cn(wideMode ? 'space-y-6 xl:flex xl:min-h-0 xl:space-y-0' : 'space-y-3')}>
                 <div className={cn(wideMode ? 'grid items-start gap-5 xl:h-full xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(460px,0.95fr)_minmax(0,1.35fr)] xl:items-stretch' : 'space-y-3')}>
@@ -433,6 +325,14 @@ export function WorkspaceShell() {
                     onCheckStatus={handleCheckStatus}
                   />
                 </div>
+              </TabsContent>
+
+              <TabsContent value="video-generation" keepMounted className={cn(wideMode ? 'xl:flex xl:min-h-0 xl:flex-1' : 'space-y-3')}>
+                <VideoGenerationWorkspace
+                  wideMode={wideMode}
+                  onConfigureApiKey={() => setSettingsOpen(true)}
+                  showToast={showToast}
+                />
               </TabsContent>
 
               <TabsContent

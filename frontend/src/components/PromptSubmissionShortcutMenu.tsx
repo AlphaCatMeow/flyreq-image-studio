@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { dispatchImageActionToast } from '@/lib/image-actions';
 import { getPromptSubmissionShortcutLabels, type PromptSubmissionShortcut } from '@/hooks/usePromptSubmissionShortcut';
+import { useI18n } from '@/components/LanguageProvider';
 
 interface PromptSubmissionShortcutMenuProps {
   value: PromptSubmissionShortcut;
@@ -25,6 +26,7 @@ interface PromptSubmissionShortcutMenuProps {
  * @returns 快捷键选择按钮与菜单。
  */
 export function PromptSubmissionShortcutMenu({ value, isSmallViewport, onValueChange }: PromptSubmissionShortcutMenuProps) {
+  const { t } = useI18n();
   /**
    * 校验菜单返回值后通知父组件更新偏好，避免写入未知值。
    * @param shortcut 菜单返回的快捷键值。
@@ -35,8 +37,8 @@ export function PromptSubmissionShortcutMenu({ value, isSmallViewport, onValueCh
       if (shortcut === value) return;
       onValueChange(shortcut);
       const labels = getPromptSubmissionShortcutLabels(shortcut);
-      const mobileNotice = isSmallViewport ? '；当前窄屏请点击发送按钮提交' : '';
-      dispatchImageActionToast(`已设置：${labels.submission} 发送，${labels.newline} 换行${mobileNotice}`, 'success');
+      const mobileNotice = isSmallViewport ? t('shortcut.mobileNotice') : '';
+      dispatchImageActionToast(t('shortcut.updated', { submission: labels.submission, newline: labels.newline, mobileNotice }), 'success');
     }
   };
 
@@ -46,21 +48,21 @@ export function PromptSubmissionShortcutMenu({ value, isSmallViewport, onValueCh
     <DropdownMenu>
       <DropdownMenuTrigger
         render={<Button variant="ghost" size="icon" />}
-        aria-label="发送快捷键"
-        title={isSmallViewport ? '窄屏模式：点击发送按钮提交' : `发送快捷键：${currentShortcutLabels.submission} 发送，${currentShortcutLabels.newline} 换行`}
+        aria-label={t('shortcut.ariaLabel')}
+        title={isSmallViewport ? t('shortcut.mobileTitle') : t('shortcut.title', { submission: currentShortcutLabels.submission, newline: currentShortcutLabels.newline })}
       >
         <Keyboard className="h-4 w-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
         <DropdownMenuRadioGroup value={value} onValueChange={handleValueChange}>
-          <DropdownMenuLabel>{isSmallViewport ? '窄屏模式：点击发送按钮提交' : '发送与换行快捷键'}</DropdownMenuLabel>
+          <DropdownMenuLabel>{isSmallViewport ? t('shortcut.mobileTitle') : t('shortcut.menuLabel')}</DropdownMenuLabel>
           <DropdownMenuRadioItem value="enter">
-            <span>Enter 发送</span>
-            <span className="ml-auto text-xs text-muted-foreground">Shift + Enter 换行</span>
+            <span>{t('shortcut.enterSubmit')}</span>
+            <span className="ml-auto text-xs text-muted-foreground">{t('shortcut.shiftEnterNewline')}</span>
           </DropdownMenuRadioItem>
           <DropdownMenuRadioItem value="shift-enter">
-            <span>Shift + Enter 发送</span>
-            <span className="ml-auto text-xs text-muted-foreground">Enter 换行</span>
+            <span>{t('shortcut.shiftEnterSubmit')}</span>
+            <span className="ml-auto text-xs text-muted-foreground">{t('shortcut.enterNewline')}</span>
           </DropdownMenuRadioItem>
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>

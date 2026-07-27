@@ -10,7 +10,7 @@ const OPTIMIZE_MAX_ATTEMPTS = 2;
 
 // ===== 模式与输入 =====
 
-export type PromptOptimizeMode = 'text-to-image' | 'image-to-image' | 'gif' | 'agent' | 'canvas-prompt-gallery-import' | 'canvas-prompt-gallery-config';
+export type PromptOptimizeMode = 'text-to-image' | 'image-to-image' | 'video' | 'gif' | 'agent' | 'canvas-prompt-gallery-import' | 'canvas-prompt-gallery-config';
 
 export interface OptimizeImageInput {
   dataUrl: string;
@@ -65,6 +65,19 @@ const SYSTEM_PROMPTS: Record<PromptOptimizeMode, string> = {
 - 使用简洁精准的中文描述
 - 不要添加与画面无关的说明文字
 只输出优化后的提示词本身，不要输出任何解释、前缀或额外说明。`,
+
+  video: `你是一位专业的 AI 视频生成提示词优化专家。
+你的任务是将用户的简短描述优化为高质量的视频生成提示词。
+优化规则：
+- 保留用户的原始意图、主体和叙事目标
+- 补充主体动作、运动轨迹和连续变化
+- 明确镜头景别、机位、运镜方式和节奏
+- 补充场景、光影、色调、材质和氛围
+- 在用户提及声音时补充环境音、对白或音乐要求
+- 避免互相冲突的动作、镜头和时间描述
+- 使用简洁精准的中文描述
+- 不要添加与视频无关的说明文字
+只输出优化后的视频提示词本身，不要输出任何解释、前缀或额外说明。`,
 
   gif: `你是一位专业的动图生成提示词优化专家。
 你的任务是结合参考图和用户描述，优化为适合生成 3×4 = 12 帧网格动画的提示词。

@@ -1,6 +1,6 @@
 'use client';
 
-import { Copy, Download, ImagePlus, Maximize2, Settings, Wand2, X, Shuffle, User, Wallpaper, RefreshCw } from 'lucide-react';
+import { Copy, Download, ImagePlus, Maximize2, Menu, Settings, Wand2, X, Shuffle, User, Wallpaper, RefreshCw } from 'lucide-react';
 import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useId, forwardRef, useImperativeHandle } from 'react';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -52,11 +52,18 @@ interface WorkspaceHeaderProps {
   onToggleWideMode: () => void;
   onOpenSettings: () => void;
   onLogoClick?: () => void;
+  onOpenNavigation?: () => void;
   sidebarMode?: boolean;
 }
 
+/**
+ * 渲染工作台品牌、快捷入口、队列状态和全局设置操作。
+ * @param props 队列状态、布局模式及各快捷入口回调。
+ * @param ref 向父组件暴露随机图片查看器操作。
+ * @returns 响应式工作台头部与随机图片查看器。
+ */
 export const WorkspaceHeader = forwardRef<WorkspaceHeaderRef, WorkspaceHeaderProps>(function WorkspaceHeader(
-  { queueStatus, wideMode, onToggleWideMode, onOpenSettings, onLogoClick, sidebarMode = false },
+  { queueStatus, wideMode, onToggleWideMode, onOpenSettings, onLogoClick, onOpenNavigation, sidebarMode = false },
   ref,
 ) {
   const { t } = useI18n();
@@ -138,9 +145,9 @@ export const WorkspaceHeader = forwardRef<WorkspaceHeaderRef, WorkspaceHeaderPro
   useEffect(() => () => cleanupViewerObjectUrl(), [cleanupViewerObjectUrl]);
 
   return (
-    <header className={cn(sidebarMode ? 'xl:pb-0' : 'space-y-3 sm:space-y-5')}>
+    <header className={cn(sidebarMode ? 'lg:hidden' : 'space-y-3 sm:space-y-5')}>
       <div className="flex items-start justify-between gap-2 sm:gap-4">
-        <div className={cn("flex min-w-0 shrink-0 items-center gap-2 sm:gap-3", sidebarMode && 'xl:hidden')}>
+        <div className={cn("flex min-w-0 shrink-0 items-center gap-2 sm:gap-3", sidebarMode && 'lg:hidden')}>
           <button
             type="button"
             onClick={onLogoClick}
@@ -160,7 +167,7 @@ export const WorkspaceHeader = forwardRef<WorkspaceHeaderRef, WorkspaceHeaderPro
         </div>
 
         {/* ── 按钮 + 状态区域（宽屏 sidebarMode 时隐藏） ── */}
-        <div className={cn('flex min-w-0 flex-1 items-center justify-end gap-1.5 sm:flex-none sm:flex-col sm:items-end sm:gap-2', sidebarMode && 'xl:hidden')}>
+        <div className={cn('flex min-w-0 flex-1 items-center justify-end gap-1.5 sm:flex-none sm:flex-col sm:items-end sm:gap-2', sidebarMode && 'lg:hidden')}>
           <div className="order-1 flex min-w-0 flex-1 flex-wrap items-center justify-start gap-1 sm:order-2 sm:flex-none sm:justify-end sm:gap-2">
             {queueStatus ? (
               <>
@@ -196,7 +203,12 @@ export const WorkspaceHeader = forwardRef<WorkspaceHeaderRef, WorkspaceHeaderPro
             )}
           </div>
           <div className="order-2 flex shrink-0 items-center justify-end gap-1.5 sm:order-1 sm:max-w-full sm:flex-wrap sm:gap-2">
-            <DropdownMenu modal={false}>
+            {onOpenNavigation ? (
+              <Button variant="outline" size="icon-sm" onClick={onOpenNavigation} title={t('navigation.openMenu')} aria-label={t('navigation.openMenu')}>
+                <Menu className="size-4" />
+              </Button>
+            ) : (<>
+              <DropdownMenu modal={false}>
               <DropdownMenuTrigger
                 className={cn(buttonVariants({ variant: "outline", size: "sm" }), "gap-0 px-2 sm:gap-2 sm:px-2.5")}
                 title={t('toolbar.randomImage')}
@@ -216,14 +228,15 @@ export const WorkspaceHeader = forwardRef<WorkspaceHeaderRef, WorkspaceHeaderPro
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-            <WideModeToggle enabled={wideMode} onToggle={onToggleWideMode} />
-            <div className="flex items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm dark:border-input dark:bg-input/20">
-              <ThemeToggle iconOnly />
-              <LanguageToggle iconOnly />
-              <Button variant="ghost" size="icon-sm" onClick={onOpenSettings} className="rounded-md" title={t('common.settings')} aria-label={t('common.settings')}>
-                <Settings className="w-4 h-4" />
-              </Button>
-            </div>
+              <WideModeToggle enabled={wideMode} onToggle={onToggleWideMode} />
+              <div className="flex items-center gap-0.5 rounded-lg border border-border bg-background p-0.5 shadow-sm dark:border-input dark:bg-input/20">
+                <ThemeToggle iconOnly />
+                <LanguageToggle iconOnly />
+                <Button variant="ghost" size="icon-sm" onClick={onOpenSettings} className="rounded-md" title={t('common.settings')} aria-label={t('common.settings')}>
+                  <Settings className="w-4 h-4" />
+                </Button>
+              </div>
+            </>)}
           </div>
         </div>
       </div>

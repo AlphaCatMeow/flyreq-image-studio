@@ -2,6 +2,7 @@
 
 import { useEffect } from 'react';
 import { AlertCircle } from 'lucide-react';
+import { useI18n } from '@/components/LanguageProvider';
 
 interface BackupProgressProps {
     percent: number;
@@ -10,6 +11,7 @@ interface BackupProgressProps {
 }
 
 export function BackupProgress({ percent, message, isActive }: BackupProgressProps) {
+    const { t } = useI18n();
     useEffect(() => {
         if (!isActive) return;
 
@@ -36,10 +38,10 @@ export function BackupProgress({ percent, message, isActive }: BackupProgressPro
                 <AlertCircle className="w-5 h-5 text-amber-600 dark:text-amber-500 flex-shrink-0 mt-0.5" />
                 <div className="flex-1 text-sm">
                     <p className="font-medium text-amber-900 dark:text-amber-100 mb-1">
-                        正在处理数据，请勿关闭页面
+                        {t('settings.backupProcessingTitle')}
                     </p>
                     <p className="text-amber-700 dark:text-amber-300">
-                        请保持此页面在前台运行，不要刷新或切换到其他标签页，否则可能导致数据丢失。
+                        {t('settings.backupProcessingDescription')}
                     </p>
                 </div>
             </div>
