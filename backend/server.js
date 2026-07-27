@@ -51,6 +51,9 @@ const DEFAULT_PLATFORM_BRANDING = {
   platformName: 'FlyReq Image',
   logoUrl: '/favicon.png',
   iconUrl: '/favicon.png',
+  pwaIcon192Url: '/icon-192.png',
+  pwaIcon512Url: '/icon-512.png',
+  pwaMaskableIcon512Url: '/icon-maskable-512.png',
   platformVersion: process.env.APP_VERSION || require(path.join(__dirname, '..', 'package.json')).version || '0.0.0',
 };
 const DEFAULT_IMAGE_MODEL_DEPLOYMENT_CONFIG = {
@@ -1050,7 +1053,7 @@ function normalizeBrandAssetUrl(value, fallback) {
 }
 
 /**
- * 读取平台名称、Logo、站点图标与镜像构建版本号的运行时品牌配置。
+ * 读取平台名称、Logo、站点图标、PWA 图标与镜像构建版本号的运行时品牌配置。
  * @param env 合并后的运行时环境变量对象。
  * @returns 可直接下发至前端和 PWA Manifest 的品牌配置。
  */
@@ -1060,6 +1063,9 @@ function resolvePlatformBranding(env = getRuntimeEnv()) {
     platformName: configuredName || DEFAULT_PLATFORM_BRANDING.platformName,
     logoUrl: normalizeBrandAssetUrl(env.FLYREQ_PLATFORM_LOGO_URL, DEFAULT_PLATFORM_BRANDING.logoUrl),
     iconUrl: normalizeBrandAssetUrl(env.FLYREQ_PLATFORM_ICON_URL, DEFAULT_PLATFORM_BRANDING.iconUrl),
+    pwaIcon192Url: normalizeBrandAssetUrl(env.FLYREQ_PWA_ICON_192_URL, DEFAULT_PLATFORM_BRANDING.pwaIcon192Url),
+    pwaIcon512Url: normalizeBrandAssetUrl(env.FLYREQ_PWA_ICON_512_URL, DEFAULT_PLATFORM_BRANDING.pwaIcon512Url),
+    pwaMaskableIcon512Url: normalizeBrandAssetUrl(env.FLYREQ_PWA_MASKABLE_ICON_512_URL, DEFAULT_PLATFORM_BRANDING.pwaMaskableIcon512Url),
     platformVersion: DEFAULT_PLATFORM_BRANDING.platformVersion,
   };
 }
@@ -1081,8 +1087,9 @@ function buildPlatformManifest(branding) {
     theme_color: '#1a1a2e',
     orientation: 'any',
     icons: [
-      { src: branding.iconUrl, sizes: '192x192', type: 'image/png', purpose: 'any' },
-      { src: branding.iconUrl, sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
+      { src: branding.pwaIcon192Url, sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: branding.pwaIcon512Url, sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: branding.pwaMaskableIcon512Url, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
     ],
   };
 }
@@ -1499,6 +1506,48 @@ function getUpstreamHttpErrorPrefix(status) {
   return status === 504
     ? '上游服务错误（HTTP 504，请再次重试）'
     : `上游服务错误（HTTP ${status}）`;
+}
+
+/**
+ * 将视频上游错误响应转换为适合任务状态展示的可读文本。
+ * @param {unknown} payload 已解析的上游 JSON 响应。
+ * @param {string} responseText 上游原始响应文本。
+ * @param {string} fallback 响应为空时使用的兜底说明。
+ * @returns 优先提取 error.message 的错误文本，无法提取时返回截断后的原始响应。
+ */
+function getVideoUpstreamErrorDetail(payload, responseText, fallback) {
+  const extracted = getMessageFromPayload(payload);
+  const detail = extracted || String(responseText || '').trim() || fallback;
+  return detail.length > 1000 ? `${detail.slice(0, 1000)}…` : detail;
+}
+
+/**
+ * 记录视频上游失败响应，同时避免把签名查询参数或 API Key 写入日志。
+ * @param {string} stage 视频请求阶段：创建、轮询或结果下载。
+ * @param {string|URL} url 实际上游请求地址。
+ * @param {Response} response 上游 HTTP 响应。
+ * @param {string} responseText 上游原始响应文本。
+ * @param {Record<string, string>} [context] 任务 ID 等不敏感诊断上下文。
+ * @returns 无返回值；诊断信息写入服务端错误日志。
+ */
+function logVideoUpstreamFailure(stage, url, response, responseText, context = {}) {
+  const maxChars = parseIntegerEnv(getRuntimeEnv().FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS, 65536, { min: 1024, max: 1024 * 1024 });
+  const rawBody = String(responseText || '');
+  const loggedBody = rawBody.length > maxChars
+    ? `${rawBody.slice(0, maxChars)}\n...[响应已截断，原始字符数=${rawBody.length}]`
+    : rawBody;
+  const diagnostics = {
+    stage,
+    url: getSafeUrlLabel(url),
+    status: response.status,
+    statusText: response.statusText,
+    contentType: response.headers.get('content-type') || '',
+    requestId: response.headers.get('x-request-id') || response.headers.get('request-id') || '',
+    cfRay: response.headers.get('cf-ray') || '',
+    ...context,
+    body: loggedBody || '<empty>',
+  };
+  console.error('[video-upstream] 上游响应异常\n' + JSON.stringify(diagnostics, null, 2));
 }
 
 function validateEnumValue(value, validValues, fieldName) {
@@ -2343,7 +2392,10 @@ async function createUpstreamVideo(apiKey, request, files, signal) {
   const response = await fetchWithTimeout(url, { method: 'POST', headers, body, signal });
   const responseText = await response.text();
   const data = parseJsonSafely(responseText);
-  if (!response.ok || !data?.id) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${data?.error || responseText || '未返回任务 ID'}`);
+  if (!response.ok || !data?.id) {
+    logVideoUpstreamFailure('create', url, response, responseText, { model: request.model });
+    throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '未返回任务 ID')}`);
+  }
   return String(data.id);
 }
 
@@ -2367,9 +2419,15 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
     const response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal });
     const responseText = await response.text();
     const data = parseJsonSafely(responseText);
-    if (!response.ok || !data) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${responseText}`);
+    if (!response.ok || !data) {
+      logVideoUpstreamFailure('poll', url, response, responseText, { upstreamTaskId });
+      throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '轮询响应格式无效')}`);
+    }
     if (data.status === 'completed' && typeof data.url === 'string' && data.url) return data.url;
-    if (data.status === 'failed') throw new Error(String(data.error || '上游视频任务失败'));
+    if (data.status === 'failed') {
+      logVideoUpstreamFailure('poll-failed', url, response, responseText, { upstreamTaskId });
+      throw new Error(`上游视频任务失败：${getVideoUpstreamErrorDetail(data, responseText, '上游未返回失败原因')}`);
+    }
     await waitForVideoPoll(intervalMs, signal);
   }
   throw new Error('视频生成超时');
@@ -2385,7 +2443,11 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
  */
 async function cacheVideoResult(taskId, remoteUrl, apiKey, signal) {
   const response = await fetchWithTimeout(remoteUrl, { headers: { Authorization: `Bearer ${apiKey}` }, signal });
-  if (!response.ok || !response.body) throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：视频下载失败`);
+  if (!response.ok || !response.body) {
+    const responseText = await response.text().catch(() => '');
+    logVideoUpstreamFailure('download', remoteUrl, response, responseText, { taskId });
+    throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(parseJsonSafely(responseText), responseText, '视频下载失败')}`);
+  }
   const ext = getVideoExtension(response.headers.get('content-type'));
   const filePath = path.join(VIDEO_DIR, `${taskId}.${ext}`);
   try {
@@ -2427,6 +2489,9 @@ async function runVideoTask(taskId) {
       .run(JSON.stringify({ videoUrl, upstreamTaskId }), completedAt, expiresAt, taskId);
   } catch (error) {
     const latest = db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
+    if (!abortController.signal.aborted) {
+      console.error(`[video-task] 视频任务执行失败 taskId=${taskId} model=${request.model} baseUrl=${getSafeUrlLabel(request.baseUrl)}`, error);
+    }
     if (latest?.status === TASK_STATUS.PROCESSING) {
       const completedAt = new Date().toISOString();
       const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
@@ -3244,6 +3309,22 @@ cleanupExpiredTasks();
 setInterval(cleanupExpiredTasks, CLEANUP_INTERVAL_MS).unref();
 setInterval(cleanupRateLimitBuckets, CLEANUP_INTERVAL_MS).unref();
 
+/**
+ * 处理 HTTP 服务监听失败，输出可直接执行的故障说明并正常结束进程。
+ * @param {NodeJS.ErrnoException} error Node.js HTTP Server 监听错误。
+ * @returns 无返回值；设置非零退出码交由进程结束。
+ */
+function handleServerListenError(error) {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`[server] 启动失败：端口 ${PORT} 已被其他进程占用。请停止旧的 FlyReq Image 实例，或通过 PORT 环境变量改用其他端口。`);
+  } else if (error.code === 'EACCES') {
+    console.error(`[server] 启动失败：没有权限监听 ${HOSTNAME}:${PORT}，请检查端口权限或改用其他端口。`);
+  } else {
+    console.error(`[server] 启动失败：无法监听 ${HOSTNAME}:${PORT}`, error);
+  }
+  process.exitCode = 1;
+}
+
 const startServer = () => {
   const wss = setupWebSocketServer();
   const httpServer = http.createServer(async (req, res) => {
@@ -3258,7 +3339,7 @@ const startServer = () => {
       res.end('Not Found');
       return;
     }
-    handle(req, res, req.url || '/');
+    return handle(req, res);
   });
 
   const nextUpgradeHandler = IS_DEV && typeof app.getUpgradeHandler === 'function'
@@ -3284,6 +3365,7 @@ const startServer = () => {
     socket.destroy();
   });
 
+  httpServer.once('error', handleServerListenError);
   httpServer.listen(PORT, HOSTNAME, () => {
     const localUrl = `http://localhost:${PORT}`;
     const listenUrl = `http://${HOSTNAME}:${PORT}`;

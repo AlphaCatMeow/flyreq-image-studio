@@ -186,6 +186,11 @@ URL 只需要一个 `provider` 参数，内容是 JSON 字符串。下面使用�
 }
 ```
 
+URL编码JSON:
+```text
+https://image.flyreq.com/zh/?provider=%7B%22type%22%3A%22image%22%2C%22preset%22%3A%22gpt-image-2%22%2C%22provider%22%3A%22openai%22%2C%22modelKey%22%3A%22flyreq-gpt-image-2%22%2C%22name%22%3A%22FlyReq%22%2C%22modelId%22%3A%22gpt-image-2%22%2C%22baseUrl%22%3A%22https%3A%2F%2Fflyreq.com%22%2C%22apiKey%22%3A%22YOUR_API_KEY%22%2C%22maxRefImages%22%3A16%2C%22maxOutputSize%22%3A%224K%22%7D
+```
+
 ```text
 https://image.flyreq.com/zh/?provider={"type":"image","preset":"gpt-image-2","provider":"openai","modelKey":"flyreq-gpt-image-2","name":"FlyReq","modelId":"gpt-image-2","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","maxRefImages":16,"maxOutputSize":"4K"}
 ```
@@ -232,6 +237,8 @@ https://image.flyreq.com/zh/?provider={"type":"video","provider":"openai","model
 ```
 
 配置完整时，视频模型会成为视频生成默认模型。视频外链只接受 OpenAI 兼容异步视频协议。
+
+视频上游创建、轮询或结果下载失败时，服务端会输出 `[video-upstream]` 结构化日志，包含请求阶段、脱敏 URL、HTTP 状态、请求追踪 ID 和上游原始响应体，不包含 API Key。单条响应默认最多记录 65536 字符，可通过 `FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS` 调整。
 
 #### 字段与行为
 
@@ -619,8 +626,11 @@ docker push ghcr.io/doudou770/flyreq-image-studio:latest
 | `FLYREQ_BASE_URL_REWRITE_MAP` | 否 | 空 | Base URL 出站改写表；例如 `{"https://flyreq.com":"http://new-api:3000"}` |
 | `FLYREQ_OUTBOUND_USER_AGENT` | 否 | `FlyReq-Image-Studio/1.5.1` | 上游请求携带的稳定服务标识；请配置为部署方可追溯的产品名称，不要伪造浏览器或第三方服务身份 |
 | `FLYREQ_PLATFORM_NAME` | 否 | `FlyReq Image` | 平台名称；用于页面标题、Header、设置页和 PWA 名称 |
-| `FLYREQ_PLATFORM_LOGO_URL` | 否 | `/favicon.png` | Header Logo 地址；仅允许站内绝对路径或 HTTP(S) URL |
-| `FLYREQ_PLATFORM_ICON_URL` | 否 | `/favicon.png` | 浏览器 favicon 与 PWA 图标地址；仅允许站内绝对路径或 HTTP(S) URL |
+| `FLYREQ_PLATFORM_LOGO_URL` | 否 | `/favicon.png` | Header Logo；建议正方形且至少 `128x128`，支持 PNG/WebP/SVG |
+| `FLYREQ_PLATFORM_ICON_URL` | 否 | `/favicon.png` | 浏览器 favicon；建议使用 `48x48` PNG 或 ICO，不作为 PWA 安装图标 |
+| `FLYREQ_PWA_ICON_192_URL` | 否 | `/icon-192.png` | PWA 普通图标；必须为 `192x192` PNG |
+| `FLYREQ_PWA_ICON_512_URL` | 否 | `/icon-512.png` | PWA 高清普通图标；必须为 `512x512` PNG |
+| `FLYREQ_PWA_MASKABLE_ICON_512_URL` | 否 | `/icon-maskable-512.png` | PWA Maskable 图标；必须为 `512x512` PNG，重要内容放在中心 80% 安全区域 |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_TITLE` | 否 | `还没有图片模型 API Key？` | 设置页图片模型 Key 指引标题 |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_DESCRIPTION` | 否 | FlyReq 默认说明 | 设置页图片模型 Key 指引描述 |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_CTA_LABEL` | 否 | `前往 flyreq.com` | 设置页图片模型 Key 指引按钮文字 |

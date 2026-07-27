@@ -222,6 +222,8 @@ https://image.flyreq.com/en/?provider={"type":"video","provider":"openai","model
 
 When complete, the imported video model becomes the video-generation default. Video links only accept the OpenAI-compatible asynchronous video protocol.
 
+When video creation, polling, or result download fails, the server writes a structured `[video-upstream]` log containing the request stage, sanitized URL, HTTP status, request-trace ID, and raw upstream response body without the API Key. Each body is limited to 65,536 characters by default and can be adjusted with `FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS`.
+
 ### Fields and behavior
 
 | Field | Description |
@@ -498,8 +500,11 @@ The built-in `GITHUB_TOKEN` requires Actions permission to write `contents` and 
 | `FLYREQ_BASE_URL_REWRITE_MAP` | No | Empty | Outbound base-URL rewrite map, for example `{"https://flyreq.com":"http://new-api:3000"}`. |
 | `FLYREQ_OUTBOUND_USER_AGENT` | No | `FlyReq-Image-Studio/1.5.1` | Stable identifier sent upstream. Use a deployment-traceable product name; do not impersonate browsers or third-party services. |
 | `FLYREQ_PLATFORM_NAME` | No | `FlyReq Image` | Product name used in the page title, header, Settings, and PWA. |
-| `FLYREQ_PLATFORM_LOGO_URL` | No | `/favicon.png` | Header logo. Only an on-site absolute path or HTTP(S) URL is allowed. |
-| `FLYREQ_PLATFORM_ICON_URL` | No | `/favicon.png` | Browser favicon and PWA icon. Only an on-site absolute path or HTTP(S) URL is allowed. |
+| `FLYREQ_PLATFORM_LOGO_URL` | No | `/favicon.png` | Header logo; use a square PNG/WebP/SVG image of at least `128x128`. |
+| `FLYREQ_PLATFORM_ICON_URL` | No | `/favicon.png` | Browser favicon; use a `48x48` PNG or ICO. It is not reused as a PWA install icon. |
+| `FLYREQ_PWA_ICON_192_URL` | No | `/icon-192.png` | Standard PWA icon; must be a `192x192` PNG. |
+| `FLYREQ_PWA_ICON_512_URL` | No | `/icon-512.png` | High-resolution PWA icon; must be a `512x512` PNG. |
+| `FLYREQ_PWA_MASKABLE_ICON_512_URL` | No | `/icon-maskable-512.png` | Maskable PWA icon; must be a `512x512` PNG with important content inside the central 80% safe zone. |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_TITLE` | No | `Need an image model API key?` | Image-model key guide title in Settings. |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_DESCRIPTION` | No | FlyReq default description | Image-model key guide description in Settings. |
 | `FLYREQ_IMAGE_MODEL_KEY_GUIDE_CTA_LABEL` | No | `Visit flyreq.com` | Image-model key guide button label. |

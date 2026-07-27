@@ -134,4 +134,14 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain('start = Math.max(0, stat.size - suffixLength)');
     expect(serverSource).toContain('start === undefined || end === undefined');
   });
+
+  it('记录视频上游原始错误响应并提取结构化错误消息', () => {
+    expect(serverSource).toContain('function logVideoUpstreamFailure(stage, url, response, responseText, context = {})');
+    expect(serverSource).toContain("console.error('[video-upstream] 上游响应异常");
+    expect(serverSource).toContain("logVideoUpstreamFailure('create'");
+    expect(serverSource).toContain("logVideoUpstreamFailure('poll'");
+    expect(serverSource).toContain("logVideoUpstreamFailure('download'");
+    expect(serverSource).toContain('const extracted = getMessageFromPayload(payload)');
+    expect(serverSource).not.toContain("${data?.error || responseText || '未返回任务 ID'}");
+  });
 });
