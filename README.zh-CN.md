@@ -223,20 +223,20 @@ https://image.flyreq.com/zh/?provider={"type":"text","provider":"openai","modelK
 ```json
 {
   "type": "video",
-  "provider": "openai",
+  "protocol": "openai",
   "modelKey": "flyreq-video-default",
   "name": "FlyReq Video",
-  "modelId": "grok-imagine-video",
-  "baseUrl": "https://flyreq.com",
+  "modelId": "sora-2",
+  "baseUrl": "https://api.openai.com",
   "apiKey": "YOUR_API_KEY"
 }
 ```
 
 ```text
-https://image.flyreq.com/zh/?provider={"type":"video","provider":"openai","modelKey":"flyreq-video-default","name":"FlyReq Video","modelId":"grok-imagine-video","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY"}
+https://image.flyreq.com/zh/?provider={"type":"video","protocol":"openai","modelKey":"flyreq-video-default","name":"FlyReq Video","modelId":"sora-2","baseUrl":"https://api.openai.com","apiKey":"YOUR_API_KEY"}
 ```
 
-配置完整时，视频模型会成为视频生成默认模型。视频外链只接受 OpenAI 兼容异步视频协议。
+配置完整时，视频模型会成为视频生成默认模型。视频外链接受 `new-api`、`openai` 与 `xai` 三种协议。新链接必须使用显式 `protocol` 字段；历史 `provider=openai` 格式继续映射到旧版视频端点。
 
 视频上游创建、轮询或结果下载失败时，服务端会输出 `[video-upstream]` 结构化日志，包含请求阶段、脱敏 URL、HTTP 状态、请求追踪 ID 和上游原始响应体，不包含 API Key。单条响应默认最多记录 65536 字符，可通过 `FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS` 调整。
 
@@ -246,7 +246,7 @@ https://image.flyreq.com/zh/?provider={"type":"video","provider":"openai","model
 | --- | --- |
 | `type` | 模型类型：`image`、`text` 或 `video`；省略时为兼容旧链接默认使用 `image` |
 | `modelKey` | 可选，稳定模型 ID；存在同 ID 时更新该模型 |
-| `provider` / `protocol` | 图片、文本支持 `openai` 或 `google`；视频只支持 `openai` |
+| `provider` / `protocol` | 图片、文本支持 `openai` 或 `google`；视频支持 `new-api`、`openai` 或 `xai`。新视频链接使用 `protocol`，历史 `provider=openai` 保留旧版端点行为 |
 | `name` | 显示名称 |
 | `modelId` | 上游模型 ID |
 | `baseUrl` | 上游 Base URL |
@@ -638,6 +638,12 @@ docker push ghcr.io/doudou770/flyreq-image-studio:latest
 | `FLYREQ_DEFAULT_IMAGE_MODEL_KEY` | 否 | `flyreq-gpt-image-2` | 首次默认图片模型的稳定内部 Key |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_NAME` | 否 | `FlyReq` | 首次默认图片模型的显示名称 |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_PROTOCOL` | 否 | `openai` | 首次默认图片模型协议：`openai` 或 `google` |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_KEY` | 否 | `flyreq-sora-2` | 首次默认视频模型的稳定内部 Key |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_NAME` | 否 | `FlyReq` | 首次默认视频模型的显示名称 |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL` | 否 | `openai` | 首次默认视频模型协议：`new-api`、`openai` 或 `xai` |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` | 否 | `https://flyreq.com` | 首次默认视频模型的 Base URL |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID` | 否 | `sora-2` | 首次默认视频模型的上游模型 ID |
+| `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` | 否 | 空 | 视频协议能力的 JSON Merge Patch 覆盖；对象递归合并，数组整体替换，`null` 删除字段 |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_BASE_URL` | 否 | `https://flyreq.com` | 首次默认图片模型的 Base URL |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_MODEL_ID` | 否 | 空 | 实际模型 ID；留空时使用预设模型 ID 映射 |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_PRESET` | 否 | `gpt-image-2` | 内置图片预设 ID，决定模型能力边界 |
@@ -650,6 +656,32 @@ docker push ghcr.io/doudou770/flyreq-image-studio:latest
 | `PROMPT_GALLERY_PASSWORD` | 否 | 空 | 提示词广场私密模式密码；为空时私密模式可直接开启 |
 
 > `.env` 修改后大部分运行时配置**实时生效**（任务并发、限流、队列容量、接单开关、Base URL 出站改写、广场模式、图片模型 Key 指引），无需重启；`PORT`、`HOSTNAME`、`NODE_ENV` 这类启动级配置仍需重启。
+
+### 视频协议配置
+
+视频工作台支持 `new-api`、OpenAI Videos（Sora）和 `xai` 三种协议。协议的时长、尺寸、宽高比、清晰度、参考图数量以及设置页默认 Base URL/模型 ID，统一定义在 `backend/video-protocol-capabilities.json`。后端在 `/api/flyreq/config` 下发合并后的 `videoProtocols`，前端据此显示控件，后端再使用同一配置校验请求。
+
+默认视频模型使用 `FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL=openai` 和 `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID=sora-2`。可选协议值如下：
+
+- `new-api`：New API 通用视频协议，创建端点为 `/v1/video/generations`。
+- `openai`：OpenAI Videos（Sora）协议，创建端点为 `/v1/videos`，这是默认值。
+- `xai`：xAI Videos 协议，创建端点为 `/v1/videos/generations`。
+
+切换协议时必须同时配置与上游匹配的 `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` 和 `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID`。
+
+| 协议 | 官方核对结果 | 配置约束来源 |
+| --- | --- | --- |
+| [New API 通用视频](https://www.newapi.ai/zh/docs/api/ai-model/videos/createvideogeneration) | 使用 `POST /v1/video/generations`、`GET /v1/video/generations/{task_id}`，请求字段为 `model`、`prompt`、`image`、`duration`、`width`、`height` | 官方未定义跨上游模型统一的时长和尺寸上限，因此配置标记为 `workspace-default`；内置 1-60 秒和尺寸列表是工作台默认边界，可用环境变量覆盖 |
+| [OpenAI Videos（Sora）](https://developers.openai.com/api/docs/guides/video-generation) | 使用 `POST /v1/videos`、`GET /v1/videos/{video_id}`、`GET /v1/videos/{video_id}/content`；支持 Sora 官方时长/尺寸，参考图采用 `input_reference` | `official`；后端额外校验 JPEG/PNG/WebP 参考图的像素尺寸必须与 `size` 完全一致 |
+| [xAI Videos](https://docs.x.ai/developers/model-capabilities/video/generation) | 使用 `POST /v1/videos/generations`、`GET /v1/videos/{request_id}`；时长 1-15 秒，支持官方宽高比与 480p/720p，1.5 模型图生视频支持 1080p | `official`；图生视频的 `image` 按官方要求发送 URL、data URI 或 `file_id` 字符串，不包装为对象 |
+
+部署差异必须通过 `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` 配置。例如，把 xAI 的页面预设时长替换为 3、6、9 秒：
+
+```env
+FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES={"protocols":{"xai":{"parameters":{"duration":{"presets":[3,6,9]}}}}}
+```
+
+覆盖遵循 JSON Merge Patch：对象递归合并，数组整体替换，`null` 删除字段。配置版本、未知协议和不完整能力会在服务端被拒绝。注册表 v1 中原来的 `openai` 视频模型会迁移为隐藏的 `legacy-openai-video`，继续沿用旧 `/v1/videos/generations` 行为；在设置页明确选择新协议后，模型才切换到对应官方端点。
 
 ---
 

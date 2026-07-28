@@ -11,8 +11,11 @@ import {
 } from '@/lib/flyreq-models';
 import {
   applyVideoWorkspaceConfig,
+  getVideoProtocolConfig,
   getVideoWorkspaceConfig,
+  getVideoProtocolDurations,
   isValidVideoDuration,
+  isValidVideoProtocolDuration,
   isValidVideoResolution,
   isValidVideoSize,
 } from '@/lib/video-config';
@@ -27,12 +30,33 @@ describe('视频模型注册表与工作台配置', () => {
     applyVideoWorkspaceConfig();
   });
 
-  it('为旧注册表迁移默认视频模型和默认工作流字段', () => {
+  it('为缺少视频模型的旧注册表补充 OpenAI 默认模型和工作流字段', () => {
     localStorage.setItem('flyreq-model-registry', JSON.stringify({ imageModels: [], textModels: [], defaults: {} }));
     const registry = loadRegistry();
-    expect(registry.videoModels[0]).toEqual(expect.objectContaining({ modelId: '', usesPresetModelId: true, presetModelId: 'grok-imagine-video', protocol: 'openai' }));
-    expect(getResolvedVideoModelId(registry.videoModels[0])).toBe('grok-imagine-video');
+    expect(registry.schemaVersion).toBe(2);
+    expect(registry.videoModels[0]).toEqual(expect.objectContaining({ modelId: '', usesPresetModelId: true, presetModelId: 'sora-2', protocol: 'openai' }));
+    expect(getResolvedVideoModelId(registry.videoModels[0])).toBe('sora-2');
     expect(registry.defaults).toHaveProperty('videoGeneration');
+  });
+
+  it('把注册表 v1 的 openai 视频模型迁移为隐藏的旧兼容协议', () => {
+    localStorage.setItem('flyreq-model-registry', JSON.stringify({
+      imageModels: [],
+      textModels: [],
+      videoModels: [{
+        id: 'legacy-video',
+        protocol: 'openai',
+        name: 'Legacy Video',
+        modelId: 'old-model',
+        apiKey: 'key',
+        baseUrl: 'https://video.example.com',
+      }],
+      defaults: { videoGeneration: 'legacy-video' },
+    }));
+
+    const registry = loadRegistry();
+    expect(registry.schemaVersion).toBe(2);
+    expect(registry.videoModels[0].protocol).toBe('legacy-openai-video');
   });
 
   it('应用部署视频模型且仅在 API Key 完整后对工作台可用', () => {
@@ -91,13 +115,18 @@ describe('视频模型注册表与工作台配置', () => {
     expect(isValidVideoSize('1279x720')).toBe(false);
     expect(isValidVideoDuration(60)).toBe(true);
     expect(isValidVideoDuration(61)).toBe(false);
+    const protocols = getVideoProtocolConfig().protocols;
+    expect(getVideoProtocolDurations(protocols.openai)).toEqual([4, 8, 12, 16, 20]);
+    expect(getVideoProtocolDurations(protocols.xai)).toEqual([5, 10, 15]);
+    expect(isValidVideoProtocolDuration(protocols.openai, 6)).toBe(false);
+    expect(isValidVideoProtocolDuration(protocols.xai, 15)).toBe(true);
   });
 });
 
 describe('后端视频任务契约', () => {
   it('包含独立队列、multipart 上传、上游创建轮询和 Range 播放', () => {
     expect(serverSource).toContain("Busboy({");
-    expect(serverSource).toContain("'/v1/videos/generations'");
+    expect(serverSource).toContain("require('./video-protocols')");
     expect(serverSource).toContain('function drainVideoQueue()');
     expect(serverSource).toContain("apiPathname === '/api/flyreq/video-tasks'");
     expect(serverSource).toContain('cancelVideoTask(taskId)');
@@ -112,8 +141,12 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain('FLYREQ_VIDEO_MAX_REF_IMAGES');
     expect(serverSource).toContain('FLYREQ_VIDEO_RESOLUTIONS');
     expect(serverSource).toContain('defaultVideoModel: resolveDefaultVideoModelConfig(env)');
+    expect(serverSource).toContain("protocol: 'openai'");
+    expect(serverSource).toContain("modelId: 'sora-2'");
     expect(serverSource).toContain('videoWorkspace: resolveVideoWorkspaceConfig(env)');
-    expect(serverSource).toContain("body.append('reference_images'");
+    expect(serverSource).toContain('videoProtocols: resolveVideoProtocolConfig(env)');
+    expect(serverSource).toContain('createVideoRequest(request.protocol');
+    expect(serverSource).toContain('validateVideoProtocolRequest(resolveVideoProtocolConfig(getRuntimeEnv())');
   });
 
   it('按附件类型限制流式缓存，且全局文件限制包含参考图片', () => {

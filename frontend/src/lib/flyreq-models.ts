@@ -35,9 +35,12 @@ export interface TextModelConfig {
   note?: string;
 }
 
+export type PublicVideoProtocol = 'new-api' | 'openai' | 'xai';
+export type VideoProtocol = PublicVideoProtocol | 'legacy-openai-video';
+
 export interface VideoModelConfig {
   id: string;
-  protocol: 'openai';
+  protocol: VideoProtocol;
   name: string;
   modelId: string;
   /** 模型 ID 留空时是否使用视频预设的默认模型 ID。 */
@@ -59,6 +62,7 @@ export interface DefaultModels {
 }
 
 export interface FlyreqModelRegistry {
+  schemaVersion: 2;
   imageModels: ImageModelConfig[];
   videoModels: VideoModelConfig[];
   textModels: TextModelConfig[];
@@ -67,8 +71,8 @@ export interface FlyreqModelRegistry {
 
 const REGISTRY_KEY = 'flyreq-model-registry';
 const DEFAULT_FLYREQ_IMAGE_MODEL_ID = 'flyreq-gpt-image-2';
-const DEFAULT_FLYREQ_VIDEO_MODEL_ID = 'flyreq-grok-imagine-video';
-export const DEFAULT_VIDEO_GENERATION_MODEL_ID = 'grok-imagine-video';
+const DEFAULT_FLYREQ_VIDEO_MODEL_ID = 'flyreq-sora-2';
+export const DEFAULT_VIDEO_GENERATION_MODEL_ID = 'sora-2';
 
 export const BUILTIN_IMAGE_PRESET_OPTIONS = Object.values(BUILTIN_IMAGE_PRESETS).map((preset) => ({
   value: preset.id,
@@ -275,7 +279,7 @@ function getDeploymentDefaultImageModels(): ImageModelConfig[] {
 }
 
 /**
- * 归一化视频模型配置并固定为 OpenAI 兼容协议。
+ * 归一化视频模型配置并保留其公开视频或旧版迁移协议。
  * @param raw 从本地存储或部署配置读取的原始视频模型数据。
  * @returns 规范化后的视频模型；缺少内部标识时返回 null。
  */
@@ -283,13 +287,13 @@ function normalizeVideoModelConfig(raw: Partial<VideoModelConfig>): VideoModelCo
   const id = String(raw.id || '').trim();
   if (!id) return null;
   const configuredModelId = String(raw.modelId || '').trim();
-  const presetModelId = String(raw.presetModelId || DEFAULT_VIDEO_GENERATION_MODEL_ID).trim();
+  const presetModelId = String(raw.presetModelId === undefined ? DEFAULT_VIDEO_GENERATION_MODEL_ID : raw.presetModelId).trim();
   const usesPresetModelId = raw.usesPresetModelId === true
     || !configuredModelId
     || configuredModelId === presetModelId;
   return {
     id,
-    protocol: 'openai',
+    protocol: raw.protocol === 'new-api' || raw.protocol === 'xai' || raw.protocol === 'openai' || raw.protocol === 'legacy-openai-video' ? raw.protocol : 'openai',
     name: String(raw.name || '').trim(),
     modelId: usesPresetModelId ? '' : configuredModelId,
     usesPresetModelId: usesPresetModelId || undefined,
@@ -404,11 +408,15 @@ function ensureTextModels(raw?: unknown): TextModelConfig[] {
  * @param raw 本地存储中的视频模型原始值。
  * @returns 去重后的模型列表；缺失时返回部署默认模型。
  */
-function ensureVideoModels(raw?: unknown): VideoModelConfig[] {
+function ensureVideoModels(raw?: unknown, migrateLegacy = false): VideoModelConfig[] {
   if (!Array.isArray(raw)) return getDeploymentDefaultVideoModels();
   if (raw.length === 0) return [];
   const models = raw
-    .map(item => normalizeVideoModelConfig((item || {}) as Partial<VideoModelConfig>))
+    .map(item => {
+      const candidate = { ...(item || {}) } as Partial<VideoModelConfig>;
+      if (migrateLegacy && candidate.protocol === 'openai') candidate.protocol = 'legacy-openai-video';
+      return normalizeVideoModelConfig(candidate);
+    })
     .filter((item): item is VideoModelConfig => Boolean(item))
     .filter((item, index, list) => list.findIndex(candidate => candidate.id === item.id) === index);
   return models.length > 0 ? models : getDeploymentDefaultVideoModels();
@@ -436,6 +444,7 @@ function ensureDefaults(raw: Partial<DefaultModels> | undefined, imageModels: Im
 
 function getInitialRegistry(): FlyreqModelRegistry {
   return {
+    schemaVersion: 2,
     imageModels: getDeploymentDefaultImageModels(),
     videoModels: getDeploymentDefaultVideoModels(),
     textModels: [],
@@ -463,10 +472,10 @@ export function loadRegistry(): FlyreqModelRegistry {
 
     const parsed = JSON.parse(raw) as Partial<FlyreqModelRegistry>;
     const imageModels = ensureImageModels(parsed.imageModels);
-    const videoModels = ensureVideoModels(parsed.videoModels);
+    const videoModels = ensureVideoModels(parsed.videoModels, parsed.schemaVersion !== 2);
     const textModels = ensureTextModels(parsed.textModels);
     const defaults = ensureDefaults(parsed.defaults, imageModels, videoModels, textModels);
-    return { imageModels, videoModels, textModels, defaults };
+    return { schemaVersion: 2, imageModels, videoModels, textModels, defaults };
   } catch {
     return getInitialRegistry();
   }
@@ -480,6 +489,7 @@ export function saveRegistry(registry: FlyreqModelRegistry): void {
   const videoModels = ensureVideoModels(registry.videoModels);
   const textModels = ensureTextModels(registry.textModels);
   const normalized: FlyreqModelRegistry = {
+    schemaVersion: 2,
     imageModels,
     videoModels,
     textModels,

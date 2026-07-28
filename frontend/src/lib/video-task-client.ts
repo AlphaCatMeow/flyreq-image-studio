@@ -16,9 +16,8 @@ export interface CreateVideoTaskInput {
   prompt: string;
   resolution: number;
   size: string;
+  aspectRatio: string;
   seconds: number;
-  referenceVideos: File[];
-  referenceAudios: File[];
   referenceImages: File[];
 }
 
@@ -41,13 +40,13 @@ export async function createVideoTask(input: CreateVideoTaskInput): Promise<stri
   const formData = new FormData();
   formData.set('apiKey', input.model.apiKey);
   formData.set('baseUrl', input.model.baseUrl);
+  formData.set('protocol', input.model.protocol);
   formData.set('model', getResolvedVideoModelId(input.model));
   formData.set('prompt', input.prompt);
   formData.set('resolution', String(input.resolution));
   formData.set('size', input.size);
+  formData.set('aspectRatio', input.aspectRatio);
   formData.set('seconds', String(input.seconds));
-  input.referenceVideos.forEach(file => formData.append('reference_videos', file, file.name));
-  input.referenceAudios.forEach(file => formData.append('reference_audios', file, file.name));
   input.referenceImages.forEach(file => formData.append('reference_images', file, file.name));
   const response = await fetch('/api/flyreq/video-tasks', { method: 'POST', body: formData });
   if (!response.ok) return throwVideoTaskError(response);

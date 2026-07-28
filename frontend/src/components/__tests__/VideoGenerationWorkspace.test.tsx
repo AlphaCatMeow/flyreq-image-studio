@@ -6,6 +6,7 @@ import { ImageGenerationWorkbench } from '@/components/ImageGenerationWorkbench'
 import { loadRegistry, saveRegistry } from '@/lib/flyreq-models';
 import { setPromptOptimizeEnabled } from '@/lib/settings-storage';
 import { restoreVideoBlobUrl } from '@/lib/video-job-store';
+import { applyVideoProtocolConfig, getVideoProtocolConfig } from '@/lib/video-config';
 
 vi.mock('@/lib/video-job-store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/video-job-store')>();
@@ -17,6 +18,7 @@ vi.mock('@/lib/video-job-store', async (importOriginal) => {
 
 describe('VideoGenerationWorkspace', () => {
   beforeEach(() => {
+    applyVideoProtocolConfig();
     localStorage.clear();
     localStorage.setItem('flyreq-locale', 'en');
     const registry = loadRegistry();
@@ -24,7 +26,7 @@ describe('VideoGenerationWorkspace', () => {
       id: 'video-test',
       protocol: 'openai',
       name: 'Video Test',
-      modelId: 'grok-imagine-video',
+      modelId: 'sora-2',
       apiKey: 'test-key',
       baseUrl: 'https://video.example.com',
     }];
@@ -33,9 +35,11 @@ describe('VideoGenerationWorkspace', () => {
     registry.defaults.promptOptimize = '';
     saveRegistry(registry);
     vi.mocked(restoreVideoBlobUrl).mockReset();
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:reference-image') });
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   });
 
-  it('renders image, video, audio, and asset-library entries in one composer', () => {
+  it('renders only supported image-reference and asset-library entries', () => {
     render(
       <LanguageProvider initialLocale="en">
         <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
@@ -43,14 +47,121 @@ describe('VideoGenerationWorkspace', () => {
     );
 
     expect(screen.getByText('Add image')).toBeInTheDocument();
-    expect(screen.getByText('Add video')).toBeInTheDocument();
-    expect(screen.getByText('Add audio')).toBeInTheDocument();
+    expect(screen.queryByText('Add video')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add audio')).not.toBeInTheDocument();
     expect(screen.getByText('Image assets')).toBeInTheDocument();
-    expect(screen.getByTestId('video-resolution-icon')).toBeInTheDocument();
-    expect(screen.getByTestId('video-parameter-grid')).toHaveClass('md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.15fr)_minmax(0,1.25fr)]');
+    expect(screen.queryByTestId('video-resolution-icon')).not.toBeInTheDocument();
+    expect(screen.getByTestId('video-parameter-grid')).toHaveClass('md:grid-cols-3');
     expect(screen.getByLabelText('Submission shortcut')).toBeInTheDocument();
     expect(screen.getByTitle('Configure the default text model first')).toBeDisabled();
     expect(screen.getByTitle('Generate video')).toBeDisabled();
+  });
+
+  it('uses the OpenAI Videos duration set and excludes unsupported defaults', () => {
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByRole('button', { name: '4s' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '8s' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '20s' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '6s' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '10s' })).not.toBeInTheDocument();
+  });
+
+  it('拒绝当前协议不支持的参考图 MIME 类型', () => {
+    const showToast = vi.fn();
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={showToast} />
+      </LanguageProvider>,
+    );
+
+    const imageInput = document.getElementById('image-reference-input') as HTMLInputElement;
+    fireEvent.change(imageInput, {
+      target: { files: [new File(['gif'], 'reference.gif', { type: 'image/gif' })] },
+    });
+
+    expect(screen.queryByAltText('reference.gif')).not.toBeInTheDocument();
+    expect(showToast).toHaveBeenCalledWith('The current video protocol does not support this reference image format.', 'error');
+  });
+
+  it('协议切换后移除超过新配置上限的参考图', async () => {
+    const protocolConfig = getVideoProtocolConfig();
+    protocolConfig.protocols.xai.references.images = 0;
+    applyVideoProtocolConfig(protocolConfig);
+    const showToast = vi.fn();
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={showToast} />
+      </LanguageProvider>,
+    );
+
+    const imageInput = document.getElementById('image-reference-input') as HTMLInputElement;
+    const image = new File(['image'], 'reference.png', { type: 'image/png' });
+    fireEvent.change(imageInput, { target: { files: [image] } });
+    expect(await screen.findByAltText('reference.png')).toBeInTheDocument();
+
+    const registry = loadRegistry();
+    registry.videoModels = [{
+      id: 'video-xai-no-image',
+      protocol: 'xai',
+      name: 'xAI No Image',
+      modelId: 'grok-imagine-video',
+      apiKey: 'test-key',
+      baseUrl: 'https://api.x.ai',
+    }];
+    registry.defaults.videoGeneration = 'video-xai-no-image';
+    saveRegistry(registry);
+    act(() => window.dispatchEvent(new Event('flyreq-model-registry-updated')));
+
+    await waitFor(() => expect(screen.queryByAltText('reference.png')).not.toBeInTheDocument());
+    expect(showToast).toHaveBeenCalledWith('You can attach up to 0 reference images.', 'error');
+  });
+
+  it('协议切换后移除新协议不支持的参考图格式', async () => {
+    const registry = loadRegistry();
+    registry.videoModels = [{
+      id: 'video-new-api',
+      protocol: 'new-api',
+      name: 'New API Video',
+      modelId: 'video-model',
+      apiKey: 'test-key',
+      baseUrl: 'https://video.example.com',
+    }];
+    registry.defaults.videoGeneration = 'video-new-api';
+    saveRegistry(registry);
+    const showToast = vi.fn();
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={showToast} />
+      </LanguageProvider>,
+    );
+
+    const imageInput = document.getElementById('image-reference-input') as HTMLInputElement;
+    fireEvent.change(imageInput, {
+      target: { files: [new File(['gif'], 'reference.gif', { type: 'image/gif' })] },
+    });
+    expect(await screen.findByAltText('reference.gif')).toBeInTheDocument();
+
+    registry.videoModels = [{
+      id: 'video-openai',
+      protocol: 'openai',
+      name: 'OpenAI Video',
+      modelId: 'sora-2',
+      apiKey: 'test-key',
+      baseUrl: 'https://api.openai.com',
+    }];
+    registry.defaults.videoGeneration = 'video-openai';
+    saveRegistry(registry);
+    act(() => window.dispatchEvent(new Event('flyreq-model-registry-updated')));
+
+    await waitFor(() => expect(screen.queryByAltText('reference.gif')).not.toBeInTheDocument());
+    expect(showToast).toHaveBeenCalledWith('The current video protocol does not support this reference image format.', 'error');
   });
 
   it('enables prompt optimization after a text model is configured', async () => {
@@ -82,6 +193,10 @@ describe('VideoGenerationWorkspace', () => {
   });
 
   it('blocks submission when an active custom parameter becomes invalid', async () => {
+    const registry = loadRegistry();
+    registry.videoModels[0].protocol = 'new-api';
+    registry.videoModels[0].modelId = 'video-model';
+    saveRegistry(registry);
     render(
       <LanguageProvider initialLocale="en">
         <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
@@ -92,13 +207,6 @@ describe('VideoGenerationWorkspace', () => {
     const submitButton = screen.getByTitle('Generate video');
     expect(submitButton).toBeEnabled();
 
-    const resolutionInput = screen.getByPlaceholderText('144-4320');
-    fireEvent.change(resolutionInput, { target: { value: '1080' } });
-    expect(submitButton).toBeEnabled();
-    fireEvent.change(resolutionInput, { target: { value: '5000' } });
-    expect(submitButton).toBeDisabled();
-
-    fireEvent.change(resolutionInput, { target: { value: '1080' } });
     const durationInput = screen.getByPlaceholderText('1-60 sec');
     fireEvent.change(durationInput, { target: { value: '8' } });
     fireEvent.change(durationInput, { target: { value: '80' } });
@@ -228,6 +336,10 @@ describe('VideoGenerationWorkspace', () => {
   });
 
   it('shows proportional visual frames when choosing a video size', async () => {
+    const registry = loadRegistry();
+    registry.videoModels[0].protocol = 'new-api';
+    registry.videoModels[0].modelId = 'video-model';
+    saveRegistry(registry);
     render(
       <LanguageProvider initialLocale="en">
         <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
@@ -246,6 +358,24 @@ describe('VideoGenerationWorkspace', () => {
     expect(screen.getAllByText('Portrait').length).toBeGreaterThan(0);
   });
 
+  it('shows xAI resolution and aspect-ratio controls without a size control', () => {
+    const registry = loadRegistry();
+    registry.videoModels[0].protocol = 'xai';
+    registry.videoModels[0].modelId = 'grok-imagine-video';
+    saveRegistry(registry);
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByTestId('video-resolution-icon')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '480p' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '16:9' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '1280x720' })).not.toBeInTheDocument();
+  });
+
   it('keeps the complete editor visible and guides configuration when the video model is unavailable', () => {
     const registry = loadRegistry();
     registry.videoModels = [];
@@ -260,8 +390,8 @@ describe('VideoGenerationWorkspace', () => {
     );
 
     expect(screen.getByText('Add image')).toBeInTheDocument();
-    expect(screen.getByText('Add video')).toBeInTheDocument();
-    expect(screen.getByText('Add audio')).toBeInTheDocument();
+    expect(screen.queryByText('Add video')).not.toBeInTheDocument();
+    expect(screen.queryByText('Add audio')).not.toBeInTheDocument();
     expect(screen.getByPlaceholderText('Describe the scene, motion, camera, pacing, and sound you want…')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '1280x720' })).toBeInTheDocument();
     expect(screen.getByText('Not configured')).toBeInTheDocument();

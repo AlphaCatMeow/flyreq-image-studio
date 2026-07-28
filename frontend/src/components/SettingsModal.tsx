@@ -53,6 +53,8 @@ import {
   type ProviderProtocol,
   type TextModelConfig,
   type VideoModelConfig,
+  type PublicVideoProtocol,
+  type VideoProtocol,
 } from '@/lib/flyreq-models';
 import {
   getExternalImageModelMatch,
@@ -72,10 +74,20 @@ import { notifyImageModelDefaultUpdated } from '@/hooks/useImageModelDefaultRefr
 import { BA_RANDOM_URL, BING_WALLPAPER_URL, IMAGE_MODEL_KEY_GUIDE } from '@/lib/constants';
 import { PROMPT_DATA_SOURCES, getPromptSourceLabel } from '@/lib/prompt-gallery-data';
 import { getOutputSizeLabel } from '@/lib/model-capabilities';
+import { getVideoProtocolConfig } from '@/lib/video-config';
 import { useBranding } from '@/components/BrandProvider';
 import { useI18n } from '@/components/LanguageProvider';
 
 type ImageModelKeyGuide = typeof IMAGE_MODEL_KEY_GUIDE;
+
+/**
+ * 从后端下发的协议能力配置读取设置页模板。
+ * @param protocol 设置页选择的公开视频协议或外链迁移使用的旧版协议。
+ * @returns 当前部署为该协议配置的基础地址与预设模型 ID。
+ */
+function getVideoProtocolTemplate(protocol: VideoProtocol): { baseUrl: string; presetModelId: string } {
+  return getVideoProtocolConfig().protocols[protocol].settings;
+}
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -146,18 +158,19 @@ function cloneVideoModel(model: VideoModelConfig): VideoModelConfig {
 
 /**
  * 创建新增视频模型的默认草稿。
- * @returns 使用 OpenAI 兼容协议的未完成视频模型配置。
+ * @returns 使用 OpenAI Videos 协议的未完成视频模型配置。
  */
 function createVideoModelDraft(): VideoModelConfig {
+  const template = getVideoProtocolTemplate('openai');
   return {
     id: generateModelId('video'),
     protocol: 'openai',
     name: '',
     modelId: '',
     usesPresetModelId: true,
-    presetModelId: 'grok-imagine-video',
+    presetModelId: template.presetModelId,
     apiKey: '',
-    baseUrl: 'https://flyreq.com',
+    baseUrl: template.baseUrl,
   };
 }
 
@@ -282,7 +295,7 @@ function normalizeDefaults(
   const completeTextModels = textModels.filter(isCompleteTextModel);
   const firstImageModelId = completeImageModels[0]?.id || '';
   const firstTextModelId = completeTextModels[0]?.id || '';
-  const completeVideoModels = getCompleteVideoModels({ imageModels: [], videoModels, textModels: [], defaults: DEFAULT_DEFAULTS });
+  const completeVideoModels = getCompleteVideoModels({ schemaVersion: 2, imageModels: [], videoModels, textModels: [], defaults: DEFAULT_DEFAULTS });
   const firstVideoModelId = completeVideoModels[0]?.id || '';
 
   return {
@@ -333,23 +346,25 @@ function patchTextModelFromExternal(model: TextModelConfig, config: ExternalText
 }
 
 /**
- * 根据外链数据创建 OpenAI 兼容视频模型草稿。
+ * 根据外链数据创建视频模型草稿。
  * @param config 已规范化的外链视频模型配置。
  * @returns 可在设置页继续补充并手动保存的视频模型。
  */
 function createExternalVideoModelDraft(config: ExternalVideoModelConfig): VideoModelConfig {
-  const presetModelId = 'grok-imagine-video';
+  const protocol = config.protocol || 'legacy-openai-video';
+  const template = getVideoProtocolTemplate(protocol);
+  const presetModelId = template.presetModelId;
   const configuredModelId = config.modelId?.trim() || '';
   const usesPresetModelId = !configuredModelId || configuredModelId === presetModelId;
   return {
     id: config.modelKey || generateModelId('video'),
-    protocol: 'openai',
+    protocol,
     name: config.name || '',
     modelId: usesPresetModelId ? '' : configuredModelId,
     usesPresetModelId: usesPresetModelId || undefined,
     presetModelId,
     apiKey: config.apiKey || '',
-    baseUrl: config.baseUrl || 'https://flyreq.com',
+    baseUrl: config.baseUrl || template.baseUrl,
   };
 }
 
@@ -360,20 +375,23 @@ function createExternalVideoModelDraft(config: ExternalVideoModelConfig): VideoM
  * @returns 保留未提供字段的更新后模型。
  */
 function patchVideoModelFromExternal(model: VideoModelConfig, config: ExternalVideoModelConfig): VideoModelConfig {
-  const presetModelId = model.presetModelId || 'grok-imagine-video';
-  const configuredModelId = config.modelId === undefined ? model.modelId.trim() : config.modelId.trim();
+  const protocol = config.protocol || model.protocol;
+  const protocolChanged = protocol !== model.protocol;
+  const template = getVideoProtocolTemplate(protocol);
+  const presetModelId = protocolChanged ? template.presetModelId : (model.presetModelId ?? template.presetModelId);
+  const configuredModelId = config.modelId === undefined ? (protocolChanged ? '' : model.modelId.trim()) : config.modelId.trim();
   const usesPresetModelId = config.modelId === undefined
-    ? Boolean(model.usesPresetModelId)
+    ? (protocolChanged || Boolean(model.usesPresetModelId))
     : (!configuredModelId || configuredModelId === presetModelId);
   return {
     ...model,
-    protocol: 'openai',
+    protocol,
     name: config.name ?? model.name,
     modelId: usesPresetModelId ? '' : configuredModelId,
     usesPresetModelId: usesPresetModelId || undefined,
     presetModelId,
     apiKey: config.apiKey ?? model.apiKey,
-    baseUrl: config.baseUrl ?? model.baseUrl,
+    baseUrl: config.baseUrl ?? (protocolChanged ? template.baseUrl : model.baseUrl),
   };
 }
 
@@ -706,10 +724,27 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   const handleUpdateVideoModel = (id: string, patch: Partial<VideoModelConfig>) => {
     setVideoModels(previous => previous.map(model => {
       if (model.id !== id) return model;
-      const next = { ...model, ...patch, protocol: 'openai' as const };
+      const next = { ...model, ...patch };
       if ('modelId' in patch) next.usesPresetModelId = !next.modelId.trim();
       return next;
     }));
+  };
+
+  /**
+   * 切换公开视频协议并应用匹配的基础地址和默认模型模板。
+   * @param id 待更新视频模型的内部标识。
+   * @param protocol 用户选择的公开视频协议。
+   * @returns 无返回值。
+   */
+  const handleChangeVideoProtocol = (id: string, protocol: PublicVideoProtocol) => {
+    const template = getVideoProtocolTemplate(protocol);
+    handleUpdateVideoModel(id, {
+      protocol,
+      baseUrl: template.baseUrl,
+      modelId: '',
+      presetModelId: template.presetModelId,
+      usesPresetModelId: Boolean(template.presetModelId) || undefined,
+    });
   };
 
   /**
@@ -769,6 +804,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     // 第一步只把完整模型写入默认工作流，未完成模型仍作为草稿保存在注册表中。
     const normalizedDefaults = normalizeDefaults(defaults, imageModels, videoModels, textModels);
     const registry = {
+      schemaVersion: 2 as const,
       imageModels,
       videoModels,
       textModels,
@@ -1183,7 +1219,20 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
 
                 {selectedVideoModel && (
                   <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.protocol')}</label><Select value="openai" disabled onValueChange={() => undefined} options={[{ value: 'openai', label: 'OpenAI Videos' }]} /></div>
+                    <div className="space-y-2">
+                      <label className="text-xs text-muted-foreground">{t('settings.protocol')}</label>
+                      <Select
+                        value={selectedVideoModel.protocol}
+                        onValueChange={(value) => handleChangeVideoProtocol(selectedVideoModel.id, value as PublicVideoProtocol)}
+                        options={[
+                          ...(selectedVideoModel.protocol === 'legacy-openai-video' ? [{ value: 'legacy-openai-video', label: t('settings.legacyVideoProtocol'), disabled: true }] : []),
+                          { value: 'new-api', label: 'New API' },
+                          { value: 'openai', label: 'OpenAI Videos (Sora)' },
+                          { value: 'xai', label: 'xAI Videos' },
+                        ]}
+                      />
+                      {selectedVideoModel.protocol === 'legacy-openai-video' && <p className="text-xs text-amber-600 dark:text-amber-400">{t('settings.legacyVideoProtocolDescription')}</p>}
+                    </div>
                     <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.displayName')}</label><Input value={selectedVideoModel.name} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { name: event.target.value })} /></div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">{t('settings.modelId')}</label>

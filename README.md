@@ -179,6 +179,11 @@ Use URL-encoded JSON in production. The raw links below are readable examples; g
 https://image.flyreq.com/en/?provider={"type":"image","preset":"gpt-image-2","provider":"openai","modelKey":"flyreq-gpt-image-2","name":"FlyReq","modelId":"gpt-image-2","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","maxRefImages":16,"maxOutputSize":"4K"}
 ```
 
+URL-encoded JSON:
+```text
+https://image.flyreq.com/zh/?provider=%7B%22type%22%3A%22image%22%2C%22preset%22%3A%22gpt-image-2%22%2C%22provider%22%3A%22openai%22%2C%22modelKey%22%3A%22flyreq-gpt-image-2%22%2C%22name%22%3A%22FlyReq%22%2C%22modelId%22%3A%22gpt-image-2%22%2C%22baseUrl%22%3A%22https%3A%2F%2Fflyreq.com%22%2C%22apiKey%22%3A%22YOUR_API_KEY%22%2C%22maxRefImages%22%3A16%2C%22maxOutputSize%22%3A%224K%22%7D
+```
+
 When complete, the imported image model becomes the text-to-image and image-to-image default.
 
 ### Text model example
@@ -207,20 +212,20 @@ When complete, the imported text model becomes the initial default for Agent, re
 ```json
 {
   "type": "video",
-  "provider": "openai",
+  "protocol": "openai",
   "modelKey": "flyreq-video-default",
   "name": "FlyReq Video",
-  "modelId": "grok-imagine-video",
-  "baseUrl": "https://flyreq.com",
+  "modelId": "sora-2",
+  "baseUrl": "https://api.openai.com",
   "apiKey": "YOUR_API_KEY"
 }
 ```
 
 ```text
-https://image.flyreq.com/en/?provider={"type":"video","provider":"openai","modelKey":"flyreq-video-default","name":"FlyReq Video","modelId":"grok-imagine-video","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY"}
+https://image.flyreq.com/en/?provider={"type":"video","protocol":"openai","modelKey":"flyreq-video-default","name":"FlyReq Video","modelId":"sora-2","baseUrl":"https://api.openai.com","apiKey":"YOUR_API_KEY"}
 ```
 
-When complete, the imported video model becomes the video-generation default. Video links only accept the OpenAI-compatible asynchronous video protocol.
+When complete, the imported video model becomes the video-generation default. Video links accept the `new-api`, `openai`, and `xai` protocols. Use the explicit `protocol` field for new links; the historical `provider=openai` form remains mapped to the legacy video endpoint.
 
 When video creation, polling, or result download fails, the server writes a structured `[video-upstream]` log containing the request stage, sanitized URL, HTTP status, request-trace ID, and raw upstream response body without the API Key. Each body is limited to 65,536 characters by default and can be adjusted with `FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS`.
 
@@ -230,7 +235,7 @@ When video creation, polling, or result download fails, the server writes a stru
 | --- | --- |
 | `type` | Required model kind: `image`, `text`, or `video`. Omitted values default to `image` for compatibility. |
 | `modelKey` | Optional stable model ID. Updates an existing model with the same ID. |
-| `provider` / `protocol` | `openai` or `google` for image/text models; video models only accept `openai`. |
+| `provider` / `protocol` | `openai` or `google` for image/text models; video models support `new-api`, `openai`, or `xai`. New video links must use `protocol`; historical `provider=openai` links retain legacy endpoint behavior. |
 | `name` | Display name. |
 | `modelId` | Upstream model ID. |
 | `baseUrl` | Upstream base URL. |
@@ -520,6 +525,12 @@ The built-in `GITHUB_TOKEN` requires Actions permission to write `contents` and 
 | `FLYREQ_DEFAULT_IMAGE_MODEL_SUPPORTS_ADVANCED_PARAMS` | No | `true` | Enables GPT Image 2 advanced parameters by default. |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_SUPPORTS_TEMPERATURE` | No | `false` | Whether the Google image model supports `temperature` by default. |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_STREAM_IMAGES` | No | `true` | Enables streaming image requests for OpenAI GPT Image 2 by default. |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_KEY` | No | `flyreq-sora-2` | Stable internal key for the first default video model. |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_NAME` | No | `FlyReq` | Display name of the first default video model. |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL` | No | `openai` | First default video-model protocol: `new-api`, `openai`, or `xai`. |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` | No | `https://flyreq.com` | Base URL of the first default video model. |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID` | No | `sora-2` | Upstream model ID of the first default video model. |
+| `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` | No | Empty | JSON Merge Patch for video protocol capabilities; objects merge recursively, arrays replace, and `null` deletes a field. |
 | `PROMPT_GALLERY_MODE` | No | `2` | `1` always visible / `2` password-protected / `3` hidden. |
 | `PROMPT_GALLERY_PASSWORD` | No | Empty | Prompt Gallery password in private mode. Private mode opens directly when empty. |
 
@@ -532,6 +543,16 @@ FLYREQ_BASE_URL_REWRITE_MAP={"https://flyreq.com":"http://new-api:3000"}
 This mapping changes only outbound server requests. It never rewrites the user's stored model configuration.
 
 Most runtime settings in `.env` take effect without a restart, including concurrency, rate limits, queue capacity, accepting-new-tasks, outbound base-URL rewrites, Prompt Gallery settings, and the image-model key guide. Restart after changing startup settings such as `PORT`, `HOSTNAME`, or `NODE_ENV`.
+
+### Video Protocol Configuration
+
+The default video model uses `FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL=openai` and `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID=sora-2`. Supported values are:
+
+- `new-api`: New API generic video protocol, using `POST /v1/video/generations`.
+- `openai`: OpenAI Videos (Sora), using `POST /v1/videos`. This is the default.
+- `xai`: xAI Videos, using `POST /v1/videos/generations`.
+
+When changing the protocol, also configure `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` and `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID` for that upstream service. Protocol capabilities are defined in `backend/video-protocol-capabilities.json` and can be overridden through `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES`.
 
 ## Task System
 

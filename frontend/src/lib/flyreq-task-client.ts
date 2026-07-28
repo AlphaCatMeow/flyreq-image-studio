@@ -271,7 +271,8 @@ export async function checkModelsAvailability(
       ...completeVideoModels.map((model) => ({
         id: model.id,
         name: model.name,
-        protocol: model.protocol,
+        // 三种视频协议均通过 Bearer 认证的 /v1/models 执行可用性检查。
+        protocol: 'openai' as const,
         baseUrl: model.baseUrl,
         apiKey: model.apiKey,
         modelId: getResolvedVideoModelId(model),
