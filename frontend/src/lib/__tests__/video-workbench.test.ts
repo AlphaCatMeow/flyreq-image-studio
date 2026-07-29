@@ -213,6 +213,8 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain('resolution: `${trace.resolution}p`');
     expect(serverSource).toContain('totalDurationMs: Math.max(0, Date.now() - startedAtMs)');
     expect(serverSource).toContain('logVideoTaskSummary({');
+    expect(serverSource).toContain('durationMs,');
+    expect(serverSource).toContain("sendJson(res, 202, { ...task, taskId })");
     expect(videoTaskClientSource).toContain("formData.set('modelName', input.model.name)");
     expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED');
     expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS');

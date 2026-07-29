@@ -190,17 +190,28 @@ function formatJobTime(value: string, locale: 'en' | 'zh'): string {
 
 /**
  * 计算并格式化视频任务从创建到当前或终态的总耗时。
- * @param createdAt 任务创建时间。
- * @param completedAt 任务终态时间；活动任务为空。
+ * @param durationMs 服务端最近一次计算的任务耗时毫秒数。
+ * @param durationUpdatedAt 最近一次同步耗时的浏览器时间。
+ * @param active 任务是否仍在排队或处理中。
+ * @param createdAt 旧版历史任务的创建时间回退值。
+ * @param completedAt 旧版历史任务的终态时间回退值。
  * @param nowMs 当前时间戳，用于实时更新活动任务。
  * @param locale 当前界面语言。
  * @returns 紧凑的本地化时分秒文本。
  */
-function formatVideoJobDuration(createdAt: string, completedAt: string | undefined, nowMs: number, locale: 'en' | 'zh'): string {
-  const startedAtMs = Date.parse(createdAt);
-  const finishedAtMs = completedAt ? Date.parse(completedAt) : nowMs;
-  if (!Number.isFinite(startedAtMs) || !Number.isFinite(finishedAtMs)) return '--';
-  const totalSeconds = Math.max(0, Math.floor((finishedAtMs - startedAtMs) / 1000));
+function formatVideoJobDuration(durationMs: number | undefined, durationUpdatedAt: string | undefined, active: boolean, createdAt: string, completedAt: string | undefined, nowMs: number, locale: 'en' | 'zh'): string {
+  let baseDurationMs = durationMs;
+  if (!Number.isFinite(baseDurationMs)) {
+    const startedAtMs = Date.parse(createdAt);
+    const finishedAtMs = completedAt ? Date.parse(completedAt) : nowMs;
+    baseDurationMs = Number.isFinite(startedAtMs) && Number.isFinite(finishedAtMs)
+      ? Math.max(0, finishedAtMs - startedAtMs)
+      : undefined;
+  }
+  if (!Number.isFinite(baseDurationMs)) return '--';
+  const syncedAtMs = Date.parse(durationUpdatedAt || '');
+  const liveDeltaMs = active && Number.isFinite(syncedAtMs) ? Math.max(0, nowMs - syncedAtMs) : 0;
+  const totalSeconds = Math.max(0, Math.floor(((baseDurationMs || 0) + liveDeltaMs) / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
   const seconds = totalSeconds % 60;
@@ -415,13 +426,13 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
           } catch {
             cached = false;
           }
-          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'completed', completedAt: task.completedAt, videoUrl, cached } : item));
+          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'completed', completedAt: task.completedAt, durationMs: task.durationMs, durationUpdatedAt: new Date().toISOString(), videoUrl, cached } : item));
         } else if (task.status === 'cancelled') {
-          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'cancelled', completedAt: task.completedAt || new Date().toISOString(), error: task.error || t('video.cancelled') } : item));
+          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'cancelled', completedAt: task.completedAt || new Date().toISOString(), durationMs: task.durationMs, durationUpdatedAt: new Date().toISOString(), error: task.error || t('video.cancelled') } : item));
         } else if (task.status === 'failed' || task.status === 'expired') {
-          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'failed', completedAt: task.completedAt || new Date().toISOString(), error: task.error || t('video.failed') } : item));
+          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'failed', completedAt: task.completedAt || new Date().toISOString(), durationMs: task.durationMs, durationUpdatedAt: new Date().toISOString(), error: task.error || t('video.failed') } : item));
         } else {
-          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: task.status === 'queued' ? '排队中' : task.status as '排队中' | 'processing' } : item));
+          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: task.status === 'queued' ? '排队中' : task.status as '排队中' | 'processing', durationMs: task.durationMs, durationUpdatedAt: new Date().toISOString() } : item));
         }
       } catch (error) {
         showToast(error instanceof Error ? error.message : t('video.failed'), 'error');
@@ -568,8 +579,8 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     setJobs(current => [job, ...current]);
     setSubmitting(true);
     try {
-      const serverTaskId = await createVideoTask({ model: selectedModel, prompt: job.prompt, resolution: activeProtocolResolution, size: activeVideoSize, aspectRatio: activeAspectRatio, seconds: activeSeconds, referenceImages, referenceVideos, referenceAudios });
-      setJobs(current => current.map(item => item.id === job.id ? { ...item, serverTaskId } : item));
+      const task = await createVideoTask({ model: selectedModel, prompt: job.prompt, resolution: activeProtocolResolution, size: activeVideoSize, aspectRatio: activeAspectRatio, seconds: activeSeconds, referenceImages, referenceVideos, referenceAudios });
+      setJobs(current => current.map(item => item.id === job.id ? { ...item, serverTaskId: task.id, createdAt: task.createdAt || item.createdAt, durationMs: task.durationMs || 0, durationUpdatedAt: new Date().toISOString() } : item));
       setReferenceImages([]);
       setReferenceVideos([]);
       setReferenceAudios([]);
@@ -675,6 +686,8 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
         ...item,
         status: 'cancelled',
         completedAt: task.completedAt || new Date().toISOString(),
+        durationMs: task.durationMs,
+        durationUpdatedAt: new Date().toISOString(),
         error: task.error || t('video.cancelled'),
       } : item));
       showToast(t('video.cancelled'), 'info');
@@ -912,7 +925,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
               <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-y py-2 text-xs sm:grid-cols-4">
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.modelName')}</dt><dd className="truncate font-medium text-foreground" title={job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}>{job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.resolution')}</dt><dd className="font-medium text-foreground">{job.resolution}p</dd></div>
-                <div className="min-w-0"><dt className="text-muted-foreground">{t('video.totalDuration')}</dt><dd className="font-medium text-foreground">{formatVideoJobDuration(job.createdAt, job.completedAt, durationNowMs, locale)}</dd></div>
+                <div className="min-w-0"><dt className="text-muted-foreground">{t('video.totalDuration')}</dt><dd className="font-medium text-foreground">{formatVideoJobDuration(job.durationMs, job.durationUpdatedAt, job.status === '排队中' || job.status === 'processing', job.createdAt, job.completedAt, durationNowMs, locale)}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.seconds')}</dt><dd className="flex items-center gap-1 font-medium text-foreground"><Clock3 className="size-3" />{job.seconds}s</dd></div>
                 <div className="col-span-2 min-w-0 sm:col-span-4"><dt className="text-muted-foreground">{t('video.taskId')}</dt><dd className="select-all break-all font-mono text-[11px] text-foreground">{job.serverTaskId || t('video.taskIdPending')}</dd></div>
               </dl>

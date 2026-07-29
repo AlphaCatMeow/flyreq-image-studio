@@ -9,6 +9,7 @@ export interface VideoTaskResponse {
   error?: string;
   createdAt?: string;
   completedAt?: string;
+  durationMs?: number;
 }
 
 export interface CreateVideoTaskInput {
@@ -36,9 +37,9 @@ async function throwVideoTaskError(response: Response): Promise<never> {
 /**
  * 创建一个视频生成任务并上传参考附件。
  * @param input 模型、提示词、参数和参考附件。
- * @returns 后端视频任务标识。
+ * @returns 后端创建的视频任务快照，包含任务标识、服务端创建时间和初始耗时。
  */
-export async function createVideoTask(input: CreateVideoTaskInput): Promise<string> {
+export async function createVideoTask(input: CreateVideoTaskInput): Promise<VideoTaskResponse> {
   const formData = new FormData();
   formData.set('apiKey', input.model.apiKey);
   formData.set('baseUrl', input.model.baseUrl);
@@ -55,9 +56,9 @@ export async function createVideoTask(input: CreateVideoTaskInput): Promise<stri
   input.referenceAudios.forEach(file => formData.append('reference_audios', file, file.name));
   const response = await fetch('/api/flyreq/video-tasks', { method: 'POST', body: formData });
   if (!response.ok) return throwVideoTaskError(response);
-  const data = await response.json() as { taskId?: string };
-  if (!data.taskId) throw new Error('后端未返回视频任务 ID');
-  return data.taskId;
+  const data = await response.json() as VideoTaskResponse;
+  if (!data.id) throw new Error('后端未返回视频任务 ID');
+  return data;
 }
 
 /**

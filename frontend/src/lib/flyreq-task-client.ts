@@ -41,6 +41,43 @@ export interface FlyreqTaskSseResult {
   requests: number;
 }
 
+export interface RemoteModelOption {
+  id: string;
+  name: string;
+}
+
+/**
+ * 根据用户填写的上游地址、密钥和协议获取可选模型目录。
+ * @param input 上游 Base URL、API Key 与协议。
+ * @returns 去重并按模型标识排序的远端模型选项。
+ */
+export async function fetchRemoteModels(input: { baseUrl: string; apiKey: string; protocol: ProviderProtocol }): Promise<RemoteModelOption[]> {
+  if (!input.baseUrl.trim() || !input.apiKey.trim()) throw new Error('请先填写 Base URL 和 API Key');
+  const response = await fetch('/api/flyreq/proxy/models', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const data = await response.json().catch(() => ({})) as {
+    data?: Array<{ id?: string; model?: string; displayName?: string; name?: string }>;
+    models?: Array<{ id?: string; model?: string; displayName?: string; name?: string }>;
+    error?: string | { message?: string };
+  };
+  if (!response.ok) {
+    const detail = typeof data.error === 'string' ? data.error : data.error?.message;
+    throw new Error(detail || `获取模型失败（HTTP ${response.status}）`);
+  }
+  const rows = Array.isArray(data.data) ? data.data : (Array.isArray(data.models) ? data.models : []);
+  const unique = new Map<string, RemoteModelOption>();
+  for (const row of rows) {
+    const id = String(row?.id || row?.model || '').replace(/^models\//, '').trim();
+    if (!id) continue;
+    unique.set(id, { id, name: String(row?.displayName || row?.name || id).trim() || id });
+  }
+  return [...unique.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
 export interface CreateFlyreqTaskInput {
   apiKey: string;
   baseUrl: string;
@@ -299,22 +336,9 @@ export async function checkModelsAvailability(
           };
         }
 
-        // 统一通过后端代理使用 /v1/models（NewAPI 兼容）
-        const proxyUrl = `/api/flyreq/proxy/models?baseUrl=${encodeURIComponent(normalizedBaseUrl)}&apiKey=${encodeURIComponent(model.apiKey)}&protocol=${model.protocol}`;
-        const response = await fetch(proxyUrl, { method: 'GET', cache: 'no-store' });
-        if (!response.ok) {
-          const detail = await response.text().catch(() => '');
-          return {
-            modelId: model.id,
-            actualName: model.name,
-            available: false,
-            message: `${response.status}${detail ? ` ${detail.slice(0, 120)}` : ''}`,
-          };
-        }
-        const data = await response.json().catch(() => ({})) as { data?: Array<{ id?: string; model?: string }> };
-        const exists = Array.isArray(data.data) && data.data.some(
-          (item) => String(item?.id || item?.model || '') === model.modelId,
-        );
+        // 复用安全的 POST 目录请求，确保 API Key 不会进入查询字符串和访问日志。
+        const remoteModels = await fetchRemoteModels({ baseUrl: normalizedBaseUrl, apiKey: model.apiKey, protocol: model.protocol });
+        const exists = remoteModels.some(item => item.id === model.modelId);
         return {
           modelId: model.id,
           actualName: model.name,

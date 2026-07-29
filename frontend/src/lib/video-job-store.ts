@@ -23,6 +23,8 @@ export interface StoredVideoJob {
   referenceImages: VideoReferenceMetadata[];
   createdAt: string;
   completedAt?: string;
+  durationMs?: number;
+  durationUpdatedAt?: string;
   videoUrl?: string;
   cached?: boolean;
   error?: string;

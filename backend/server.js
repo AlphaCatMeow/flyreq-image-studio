@@ -2786,6 +2786,11 @@ function serializeTask(task) {
     return { id: task.id, status: 'expired', error: '该任务已超出取回时间' };
   }
   const result = task.result_json ? JSON.parse(task.result_json) : undefined;
+  const createdAtMs = Date.parse(task.created_at);
+  const completedAtMs = task.completed_at ? Date.parse(task.completed_at) : Date.now();
+  const durationMs = Number.isFinite(createdAtMs) && Number.isFinite(completedAtMs)
+    ? Math.max(0, completedAtMs - createdAtMs)
+    : undefined;
   return {
     id: task.id,
     status: task.status,
@@ -2795,6 +2800,7 @@ function serializeTask(task) {
     warning: task.warning,
     createdAt: task.created_at,
     completedAt: task.completed_at,
+    durationMs,
     expiresAt: task.expires_at,
   };
 }
@@ -3246,23 +3252,27 @@ async function handleApi(req, res, pathname) {
       return true;
     }
 
-    // ===== 模型检查代理（统一使用 /v1/models） =====
-    if (req.method === 'GET' && apiPathname === '/api/flyreq/proxy/models') {
+    // ===== 模型检查与目录代理 =====
+    if ((req.method === 'GET' || req.method === 'POST') && apiPathname === '/api/flyreq/proxy/models') {
       try {
         const parsed = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-        const baseUrl = parsed.searchParams.get('baseUrl');
-        const apiKey = parsed.searchParams.get('apiKey');
-        const protocol = parsed.searchParams.get('protocol') || 'openai';
+        // POST 将密钥放在请求体内，避免 API Key 出现在浏览器地址、代理日志和服务器访问日志中。
+        const body = req.method === 'POST' ? await readJsonBody(req) : {};
+        const baseUrl = req.method === 'POST' ? body.baseUrl : parsed.searchParams.get('baseUrl');
+        const apiKey = req.method === 'POST' ? body.apiKey : parsed.searchParams.get('apiKey');
+        const protocol = (req.method === 'POST' ? body.protocol : parsed.searchParams.get('protocol')) || 'openai';
         if (!baseUrl || !apiKey) {
           sendJson(res, 400, { error: 'Missing baseUrl or apiKey' });
           return true;
         }
 
         const normalizedBaseUrl = resolveAndLogOutboundBaseUrl('模型列表', protocol, baseUrl).baseUrl;
-        const modelsUrl = `${stripProtocolVersionSuffix(protocol, normalizedBaseUrl)}/v1/models`;
-        // 模型列表查询只发送 Authorization 头。x-goog-api-key 仅用于 Gemini 生成端点，
-        // 对 /v1/models (兼容 OpenAI 格式的 NewAPI 等) 会引发错误或返回空列表。
-        const headers = { Authorization: `Bearer ${apiKey}` };
+        const isGoogle = protocol === 'google';
+        const modelsUrl = `${stripProtocolVersionSuffix(protocol, normalizedBaseUrl)}${isGoogle ? '/v1beta/models' : '/v1/models'}`;
+        // Google 原生目录使用 x-goog-api-key；其余兼容协议统一使用 Bearer 认证。
+        const headers = isGoogle
+          ? { 'x-goog-api-key': String(apiKey) }
+          : { Authorization: `Bearer ${apiKey}` };
 
         const response = await fetchWithTimeout(modelsUrl, { method: 'GET', headers });
         let data = null;
@@ -3279,7 +3289,8 @@ async function handleApi(req, res, pathname) {
       const { fields, files } = await readVideoMultipartBody(req);
       const payload = await normalizeVideoTaskPayload(fields, files);
       const taskId = createVideoTask(payload, files, req);
-      sendJson(res, 202, { taskId });
+      const task = serializeTask(db.prepare('SELECT * FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation'));
+      sendJson(res, 202, { ...task, taskId });
       return true;
     }
 

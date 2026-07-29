@@ -67,7 +67,7 @@ import {
 } from '@/lib/external-model-config';
 import { syncDynamicModelExports } from '@/lib/gemini-config';
 import { exportAllData, importAllData, downloadBlob, generateBackupFilename, type BackupProgress as BackupProgressType } from '@/lib/backup-utils';
-import { checkModelsAvailability, type ModelStatus } from '@/lib/flyreq-task-client';
+import { checkModelsAvailability, fetchRemoteModels, type ModelStatus, type RemoteModelOption } from '@/lib/flyreq-task-client';
 import { hasConfiguredImageModel, isPromptOptimizeEnabled, setPromptOptimizeEnabled } from '@/lib/settings-storage';
 import { saveFirstImageModelAsFormDefault } from '@/lib/form-settings';
 import { notifyImageModelDefaultUpdated } from '@/hooks/useImageModelDefaultRefresh';
@@ -124,6 +124,55 @@ interface SettingsDraftSnapshot {
   textModels: TextModelConfig[];
   defaults: DefaultModels;
   promptOptimizeEnabled: boolean;
+}
+
+interface ModelCatalogState {
+  loading: boolean;
+  options: RemoteModelOption[];
+  error: string | null;
+  loaded: boolean;
+}
+
+interface ModelCatalogControlsProps {
+  state?: ModelCatalogState;
+  fetchLabel: string;
+  fetchingLabel: string;
+  remoteModelLabel: string;
+  selectPlaceholder: string;
+  successMessage: string;
+  emptyMessage: string;
+  onFetch: () => void;
+  onSelect: (modelId: string) => void;
+}
+
+/**
+ * 渲染单个模型配置的远端模型获取按钮、候选列表和请求结果。
+ * @param props 按钮文案、目录状态及获取和选择回调。
+ * @returns 可复用于图片、视频和文本模型的目录选择控件。
+ */
+function ModelCatalogControls({ state, fetchLabel, fetchingLabel, remoteModelLabel, selectPlaceholder, successMessage, emptyMessage, onFetch, onSelect }: ModelCatalogControlsProps) {
+  return (
+    <div className="space-y-2">
+      <Button type="button" variant="outline" size="sm" className="gap-2" disabled={state?.loading} onClick={onFetch}>
+        <RefreshCw className={`size-4 ${state?.loading ? 'animate-spin' : ''}`} />
+        {state?.loading ? fetchingLabel : fetchLabel}
+      </Button>
+      {state?.error && <p className="text-xs text-destructive">{state.error}</p>}
+      {state?.loaded && state.options.length === 0 && <p className="text-xs text-muted-foreground">{emptyMessage}</p>}
+      {state && state.options.length > 0 && (
+        <div className="space-y-2">
+          <label className="text-xs text-muted-foreground">{remoteModelLabel}</label>
+          <Select
+            value=""
+            placeholder={selectPlaceholder}
+            onValueChange={onSelect}
+            options={state.options.map(option => ({ value: option.id, label: option.name === option.id ? option.id : `${option.name} (${option.id})` }))}
+          />
+          <p className="text-xs text-muted-foreground">{successMessage}</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -460,6 +509,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   const [checkingModels, setCheckingModels] = useState(false);
   const [modelStatuses, setModelStatuses] = useState<ModelStatus[] | null>(null);
   const [modelCheckError, setModelCheckError] = useState<string | null>(null);
+  const [modelCatalogs, setModelCatalogs] = useState<Record<string, ModelCatalogState>>({});
   const [showImageApiKey, setShowImageApiKey] = useState(false);
   const [showTextApiKey, setShowTextApiKey] = useState(false);
   const [showVideoApiKey, setShowVideoApiKey] = useState(false);
@@ -499,6 +549,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
       setExternalConfigNotice(null);
       setModelStatuses(null);
       setModelCheckError(null);
+      setModelCatalogs({});
       setBackupError(null);
       setBackupSuccess(null);
       setPromptOptimizeEnabledState(optimizeEnabled);
@@ -644,6 +695,47 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   );
   const selectedVideoCreateEndpoint = selectedVideoModel ? getVideoCreateEndpoint(selectedVideoModel.protocol) : null;
 
+  /**
+   * 清除指定配置此前从旧协议、地址或密钥获取的模型目录。
+   * @param modelId 需要清理目录状态的内部模型标识。
+   * @returns 无返回值；状态不存在时保持当前目录集合不变。
+   */
+  const clearModelCatalog = (modelId: string): void => {
+    setModelCatalogs(previous => {
+      if (!previous[modelId]) return previous;
+      const next = { ...previous };
+      delete next[modelId];
+      return next;
+    });
+  };
+
+  /**
+   * 使用当前模型的 Base URL 和 API Key 拉取远端模型目录。
+   * @param model 当前正在配置的图片、视频或文本模型。
+   * @param protocol 模型目录端点使用的鉴权协议。
+   * @returns 请求完成后更新对应模型的目录状态，无直接返回值。
+   */
+  const handleFetchModels = async (model: { id: string; baseUrl: string; apiKey: string }, protocol: ProviderProtocol): Promise<void> => {
+    setModelCatalogs(previous => ({
+      ...previous,
+      [model.id]: { loading: true, options: previous[model.id]?.options || [], error: null, loaded: false },
+    }));
+    try {
+      const options = await fetchRemoteModels({ baseUrl: model.baseUrl, apiKey: model.apiKey, protocol });
+      setModelCatalogs(previous => ({ ...previous, [model.id]: { loading: false, options, error: null, loaded: true } }));
+    } catch (requestError) {
+      setModelCatalogs(previous => ({
+        ...previous,
+        [model.id]: {
+          loading: false,
+          options: [],
+          error: requestError instanceof Error ? requestError.message : t('settings.fetchModelsFailed'),
+          loaded: true,
+        },
+      }));
+    }
+  };
+
   const handleAddImageModel = () => {
     const draft = createImageModelDraft();
     setImageModels((prev) => [...prev, draft]);
@@ -657,6 +749,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
    * @returns 无返回值；通过状态更新渲染最新配置。
    */
   const handleUpdateImageModel = (id: string, patch: Partial<ImageModelConfig>) => {
+    if ('protocol' in patch || 'baseUrl' in patch || 'apiKey' in patch || 'builtinPreset' in patch) clearModelCatalog(id);
     setImageModels((prev) => prev.map((model) => {
       if (model.id !== id) return model;
       const next = { ...model, ...patch };
@@ -729,6 +822,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
    * @returns 无返回值。
    */
   const handleUpdateVideoModel = (id: string, patch: Partial<VideoModelConfig>) => {
+    if ('baseUrl' in patch || 'apiKey' in patch) clearModelCatalog(id);
     setVideoModels(previous => previous.map(model => {
       if (model.id !== id) return model;
       const next = { ...model, ...patch };
@@ -744,6 +838,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
    * @returns 无返回值。
    */
   const handleChangeVideoProtocol = (id: string, protocol: PublicVideoProtocol) => {
+    clearModelCatalog(id);
     setVideoModels(previous => previous.map(model => model.id === id ? patchVideoModelProtocol(model, protocol) : model));
   };
 
@@ -760,6 +855,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   };
 
   const handleUpdateTextModel = (id: string, patch: Partial<TextModelConfig>) => {
+    if ('baseUrl' in patch || 'apiKey' in patch) clearModelCatalog(id);
     setTextModels((prev) => prev.map((model) => (model.id === id ? { ...model, ...patch } : model)));
   };
 
@@ -1123,6 +1219,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                         </button>
                       </div>
                     </div>
+                    <div className="md:col-span-2">
+                      <ModelCatalogControls
+                        state={modelCatalogs[selectedImageModel.id]}
+                        fetchLabel={t('settings.fetchModels')}
+                        fetchingLabel={t('settings.fetchingModels')}
+                        remoteModelLabel={t('settings.remoteModel')}
+                        selectPlaceholder={t('settings.selectRemoteModel')}
+                        successMessage={t('settings.modelsFetched', { count: modelCatalogs[selectedImageModel.id]?.options.length || 0 })}
+                        emptyMessage={t('settings.noRemoteModels')}
+                        onFetch={() => void handleFetchModels(selectedImageModel, selectedImageModel.protocol)}
+                        onSelect={(modelId) => handleUpdateImageModel(selectedImageModel.id, { modelId, usesPresetModelId: false })}
+                      />
+                    </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">{t('settings.maxReferenceImages')}</label>
                       <Input
@@ -1248,6 +1357,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                     </div>
                     <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.baseUrl')}</label><Input value={selectedVideoModel.baseUrl} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { baseUrl: event.target.value })} /></div>
                     <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">{t('settings.apiKey')}</label><div className="relative"><Input type={showVideoApiKey ? 'text' : 'password'} value={selectedVideoModel.apiKey} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { apiKey: event.target.value })} className="pr-9" /><button type="button" onClick={() => setShowVideoApiKey(value => !value)} className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted" aria-label={t('settings.apiKey')}>{showVideoApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div></div>
+                    <div className="md:col-span-2">
+                      <ModelCatalogControls
+                        state={modelCatalogs[selectedVideoModel.id]}
+                        fetchLabel={t('settings.fetchModels')}
+                        fetchingLabel={t('settings.fetchingModels')}
+                        remoteModelLabel={t('settings.remoteModel')}
+                        selectPlaceholder={t('settings.selectRemoteModel')}
+                        successMessage={t('settings.modelsFetched', { count: modelCatalogs[selectedVideoModel.id]?.options.length || 0 })}
+                        emptyMessage={t('settings.noRemoteModels')}
+                        onFetch={() => void handleFetchModels(selectedVideoModel, 'openai')}
+                        onSelect={(modelId) => handleUpdateVideoModel(selectedVideoModel.id, { modelId, usesPresetModelId: false })}
+                      />
+                    </div>
                     <div className="flex justify-end md:col-span-2"><Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={() => handleDeleteVideoModel(selectedVideoModel.id)}><Trash2 className="size-4" />{t('settings.deleteModel')}</Button></div>
                   </div>
                 )}
@@ -1292,6 +1414,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                         value={selectedTextModel.protocol}
                         onValueChange={(value) => {
                           const protocol = value as ProviderProtocol;
+                          clearModelCatalog(selectedTextModel.id);
                           setTextModels(previous => previous.map(model => model.id === selectedTextModel.id ? patchTextModelProtocol(model, protocol) : model));
                         }}
                         options={[
@@ -1331,6 +1454,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                           {showTextApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <ModelCatalogControls
+                        state={modelCatalogs[selectedTextModel.id]}
+                        fetchLabel={t('settings.fetchModels')}
+                        fetchingLabel={t('settings.fetchingModels')}
+                        remoteModelLabel={t('settings.remoteModel')}
+                        selectPlaceholder={t('settings.selectRemoteModel')}
+                        successMessage={t('settings.modelsFetched', { count: modelCatalogs[selectedTextModel.id]?.options.length || 0 })}
+                        emptyMessage={t('settings.noRemoteModels')}
+                        onFetch={() => void handleFetchModels(selectedTextModel, selectedTextModel.protocol)}
+                        onSelect={(modelId) => handleUpdateTextModel(selectedTextModel.id, { modelId })}
+                      />
                     </div>
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs text-muted-foreground">{t('settings.protocolDescription')}</label>

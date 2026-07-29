@@ -115,6 +115,46 @@ describe('SettingsModal unsaved configuration', () => {
     expect(screen.getAllByRole('button', { name: 'Show or hide API Key' }).length).toBeGreaterThan(0);
   });
 
+  it('fetches remote models securely for every model type while keeping custom model input editable', async () => {
+    localStorage.setItem('flyreq-model-registry', JSON.stringify({
+      schemaVersion: 2,
+      imageModels: [{ id: 'image-model', protocol: 'openai', name: 'Image', modelId: 'custom-image', apiKey: 'image-key', baseUrl: 'https://image.example.com', builtinPreset: 'gpt-image-2', maxRefImages: 1, maxOutputSize: '1K' }],
+      videoModels: [{ id: 'video-model', protocol: 'new-api', name: 'Video', modelId: 'video-id', apiKey: 'video-key', baseUrl: 'https://video.example.com' }],
+      textModels: [{ id: 'text-model', protocol: 'openai', name: 'Text', modelId: 'text-id', apiKey: 'text-key', baseUrl: 'https://text.example.com' }],
+      defaults: { textToImage: 'image-model', imageToImage: 'image-model', videoGeneration: 'video-model', reversePrompt: 'text-model', agent: 'text-model', promptOptimize: 'text-model', imageDescribe: 'text-model' },
+    }));
+    const fetchMock = vi.fn().mockImplementation(async (input: string, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      json: async () => input === '/api/flyreq/proxy/models'
+        ? { data: [{ id: 'image-fetched', name: 'Fetched Image' }] }
+        : {},
+      requestInit: init,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderSettings();
+
+    const fetchButtons = await screen.findAllByRole('button', { name: 'Fetch models' });
+    expect(fetchButtons).toHaveLength(3);
+    fireEvent.click(fetchButtons[0]);
+
+    expect(await screen.findByText('1 models fetched. Select one below or enter a custom model ID.')).toBeInTheDocument();
+    const modelRequest = fetchMock.mock.calls.find(([input]) => input === '/api/flyreq/proxy/models');
+    expect(modelRequest?.[1]).toMatchObject({ method: 'POST' });
+    expect(JSON.parse(String(modelRequest?.[1]?.body))).toEqual({
+      baseUrl: 'https://image.example.com',
+      apiKey: 'image-key',
+      protocol: 'openai',
+    });
+
+    fireEvent.click(screen.getByText('Select a fetched model'));
+    fireEvent.click(await screen.findByRole('option', { name: 'Fetched Image (image-fetched)' }));
+    const selectedInput = screen.getByDisplayValue('image-fetched');
+    fireEvent.change(selectedInput, { target: { value: 'my-custom-model' } });
+    expect(screen.getByDisplayValue('my-custom-model')).toBeInTheDocument();
+  });
+
   it('shows the save bar after editing and commits the configuration', async () => {
     renderSettings();
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save now' })).toBeDisabled());
