@@ -64,8 +64,8 @@ describe('视频协议能力配置', () => {
       { protocols: { xai: { parameters: { size: { values: ['not-a-size'] } } } } },
       { protocols: { xai: { parameters: { aspectRatio: { values: ['not-a-ratio'] } } } } },
       { protocols: { xai: { parameters: { resolution: { values: [5000] } } } } },
-      { protocols: { xai: { references: { images: 6 } } } },
-      { protocols: { xai: { references: { videos: 6 } } } },
+      { protocols: { xai: { references: { images: 21 } } } },
+      { protocols: { xai: { references: { videos: 21 } } } },
       { protocols: { xai: { references: { imageMimeTypes: ['text/plain'] } } } },
       { protocols: { xai: { references: { videoMimeTypes: ['text/plain'] } } } },
     ];
@@ -92,6 +92,15 @@ describe('视频协议能力配置', () => {
     expect(config.protocols['new-api'].createEndpoint).toEqual({ method: 'POST', path: '/v1/video/generations' });
     expect(config.protocols.openai.createEndpoint).toEqual({ method: 'POST', path: '/v1/videos' });
     expect(config.protocols.xai.createEndpoint).toEqual({ method: 'POST', path: '/v1/videos/generations' });
+  });
+
+  it('为通用视频协议提供默认附件数量和 4K 清晰度', () => {
+    const config = resolveVideoProtocolConfig({});
+    for (const protocol of ['new-api', 'openai', 'legacy-openai-video']) {
+      expect(config.protocols[protocol].references).toEqual(expect.objectContaining({ images: 9, videos: 3, audios: 3 }));
+      expect(config.protocols[protocol].parameters.resolution.values).toContain(2160);
+    }
+    expect(config.protocols.xai.references).toEqual(expect.objectContaining({ images: 1, videos: 0, audios: 0 }));
   });
 
   it('仅允许 xAI 1.5 图生视频使用 1080p', () => {
@@ -123,7 +132,7 @@ describe('视频协议能力配置', () => {
       size: '1280x720',
       aspectRatio: '',
       resolution: 720,
-    }, { images: [{}, {}], videos: [], audios: [] })).toThrow('参考附件不符合当前协议限制');
+    }, { images: Array.from({ length: 10 }, () => ({})), videos: [], audios: [] })).toThrow('参考附件不符合当前协议限制');
   });
 
   it('按 OpenAI 官方要求校验参考图格式与输出尺寸', async () => {
@@ -136,6 +145,13 @@ describe('视频协议能力配置', () => {
 
     await expect(validateVideoProtocolReferences(profile, { size: '4x2' }, validFiles)).resolves.toBeUndefined();
     await expect(validateVideoProtocolReferences(profile, { size: '2x4' }, validFiles)).rejects.toThrow('参考图尺寸必须与视频尺寸一致');
+    const mismatchedImageBuffer = await sharp({
+      create: { width: 2, height: 4, channels: 3, background: '#000000' },
+    }).png().toBuffer();
+    await expect(validateVideoProtocolReferences(profile, { size: '4x2' }, {
+      ...emptyFiles,
+      images: [validFiles.images[0], { mimeType: 'image/png', buffer: mismatchedImageBuffer }],
+    })).rejects.toThrow('第 2 张参考图尺寸必须与视频尺寸一致');
     await expect(validateVideoProtocolReferences(profile, { size: '4x2' }, {
       ...emptyFiles,
       images: [{ mimeType: 'image/gif', buffer: imageBuffer }],

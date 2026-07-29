@@ -50,7 +50,10 @@ describe('VideoGenerationWorkspace', () => {
     expect(screen.getByText('Add image')).toBeInTheDocument();
     expect(screen.getByText('Add video')).toBeInTheDocument();
     expect(screen.getByText('Add audio')).toBeInTheDocument();
-    expect(screen.getByText('Image assets')).toBeInTheDocument();
+    expect(screen.getByText('Asset library')).toBeInTheDocument();
+    expect(screen.getByText('0 / 9')).toBeInTheDocument();
+    expect(screen.getAllByText('0 / 3')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: '4K' })).toBeInTheDocument();
     expect(screen.getByTestId('video-resolution-icon')).toBeInTheDocument();
     expect(screen.getByTestId('video-parameter-grid')).toHaveClass('md:grid-cols-3');
     expect(screen.getByLabelText('Submission shortcut')).toBeInTheDocument();

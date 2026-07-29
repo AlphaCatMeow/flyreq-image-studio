@@ -74,6 +74,15 @@ describe('视频协议适配器', () => {
     expect(getVideoDownloadHeaders('https://cdn.example/video.mp4', 'http://internal-api:3000', 'secret')).toEqual({});
   });
 
+  it('将 2160 清晰度作为 4k 发送给 New API 和 OpenAI', () => {
+    const request4k = { ...request, resolution: 2160 };
+    const newApi = createVideoRequest('new-api', 'key', request4k, files);
+    expect(JSON.parse(newApi.init.body).metadata.resolution).toBe('4k');
+
+    const openai = createVideoRequest('openai', 'key', request4k, files);
+    expect(openai.init.body.get('resolution')).toBe('4k');
+  });
+
   it('构造 xAI JSON 请求并识别 request_id 与 video.url', () => {
     const upstream = createVideoRequest('xai', 'key', request, files);
     expect(upstream.path).toBe('/v1/videos/generations');
@@ -98,5 +107,13 @@ describe('视频协议适配器', () => {
       size: '1280x720',
       seconds: 8,
     }));
+  });
+
+  it('旧兼容协议不会丢弃声明支持的参考媒体', () => {
+    const upstream = createVideoRequest('legacy-openai-video', 'key', request, files);
+    expect(upstream.init.body).toBeInstanceOf(FormData);
+    expect(upstream.init.body.getAll('reference_images')).toHaveLength(1);
+    expect(upstream.init.body.getAll('reference_videos')).toHaveLength(1);
+    expect(upstream.init.body.getAll('reference_audios')).toHaveLength(1);
   });
 });

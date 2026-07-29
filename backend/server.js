@@ -10,7 +10,7 @@ const Busboy = require('busboy');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { createXaiImagineRequestInit, getXaiImagineEndpoint } = require('./xai-imagine');
-const { createVideoRequest, getCreatedVideoTaskId, getVideoDownloadHeaders, getVideoPollPath, normalizeVideoPollResult } = require('./video-protocols');
+const { createVideoRequest, formatVideoResolution, getCreatedVideoTaskId, getVideoDownloadHeaders, getVideoPollPath, normalizeVideoPollResult } = require('./video-protocols');
 const { isPublicVideoProtocol, isVideoProtocol, resolveVideoProtocolConfig, validateVideoProtocolReferences, validateVideoProtocolRequest } = require('./video-protocol-config');
 const {
   getVideoUpstreamLogMaxChars,
@@ -87,10 +87,10 @@ const DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG = {
   baseUrl: 'https://flyreq.com',
 };
 const DEFAULT_VIDEO_WORKSPACE_CONFIG = {
-  maxRefImages: 5,
-  maxRefVideos: 5,
-  maxRefAudios: 5,
-  resolutions: [720, 480],
+  maxRefImages: 9,
+  maxRefVideos: 3,
+  maxRefAudios: 3,
+  resolutions: [720, 480, 1080, 2160],
   sizes: ['1280x720', '720x1280', '1024x1024', '1792x1024', '1024x1792', 'auto'],
   durations: [6, 10, 12, 15, 20],
   maxReferenceVideoBytes: 104857600,
@@ -1528,7 +1528,7 @@ function getVideoTaskLogContext(trace, extra = {}) {
     taskId: trace.taskId,
     modelName: trace.modelName,
     model: trace.model,
-    resolution: `${trace.resolution}p`,
+    resolution: formatVideoResolution(trace.resolution),
     elapsedMs: Math.max(0, Date.now() - trace.startedAtMs),
     ...extra,
   };
@@ -2583,7 +2583,7 @@ function cancelVideoTask(taskId) {
       taskId,
       modelName: request.modelName || request.model || '',
       model: request.model || '',
-      resolution: request.resolution ? `${request.resolution}p` : '',
+      resolution: request.resolution ? formatVideoResolution(request.resolution) : '',
       status: TASK_STATUS.CANCELLED,
       elapsedMs: Math.max(0, Date.now() - startedAtMs),
       totalDurationMs: Math.max(0, Date.now() - startedAtMs),

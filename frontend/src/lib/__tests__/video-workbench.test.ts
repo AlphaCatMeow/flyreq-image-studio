@@ -153,6 +153,16 @@ describe('视频模型注册表与工作台配置', () => {
     expect(isValidVideoProtocolDuration(protocols.openai, 61)).toBe(false);
     expect(isValidVideoProtocolDuration(protocols.xai, 15)).toBe(true);
   });
+
+  it('提供视频工作台的默认附件上限和 4K 清晰度', () => {
+    applyVideoWorkspaceConfig();
+    expect(getVideoWorkspaceConfig()).toEqual(expect.objectContaining({
+      maxRefImages: 9,
+      maxRefVideos: 3,
+      maxRefAudios: 3,
+      resolutions: [720, 480, 1080, 2160],
+    }));
+  });
 });
 
 describe('后端视频任务契约', () => {
@@ -210,7 +220,7 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain("logVideoUpstreamResponse('download'");
     expect(serverSource).toContain('taskId: trace.taskId');
     expect(serverSource).toContain('modelName: trace.modelName');
-    expect(serverSource).toContain('resolution: `${trace.resolution}p`');
+    expect(serverSource).toContain('resolution: formatVideoResolution(trace.resolution)');
     expect(serverSource).toContain('totalDurationMs: Math.max(0, Date.now() - startedAtMs)');
     expect(serverSource).toContain('logVideoTaskSummary({');
     expect(serverSource).toContain('durationMs,');

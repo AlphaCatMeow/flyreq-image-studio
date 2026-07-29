@@ -47,6 +47,15 @@ function getVideoDownloadHeaders(remoteUrl, authenticatedOrigin, apiKey) {
 }
 
 /**
+ * 将内部清晰度数值转换为上游视频协议使用的字符串。
+ * @param {number} resolution 视频垂直清晰度数值，2160 代表 4K。
+ * @returns {string} 4K 返回 4k，其余清晰度返回带 p 后缀的字符串。
+ */
+function formatVideoResolution(resolution) {
+  return resolution === 2160 ? '4k' : `${resolution}p`;
+}
+
+/**
  * 根据协议构造视频创建请求。
  * @param {'new-api' | 'openai' | 'xai' | 'legacy-openai-video'} protocol 视频协议。
  * @param {string} apiKey 上游 API Key。
@@ -66,7 +75,7 @@ function createVideoRequest(protocol, apiKey, request, files) {
     body.append('prompt', request.prompt);
     body.append('seconds', String(request.seconds));
     if (request.size !== 'auto') body.append('size', request.size);
-    body.append('resolution', `${request.resolution}p`);
+    body.append('resolution', formatVideoResolution(request.resolution));
     if (image) body.append('input_reference', new Blob([image.buffer], { type: image.mimeType }), image.filename);
     appendMediaFiles(body, 'reference_images', images);
     appendMediaFiles(body, 'reference_videos', videos);
@@ -76,10 +85,12 @@ function createVideoRequest(protocol, apiKey, request, files) {
 
   if (protocol === 'legacy-openai-video') {
     const common = { model: request.model, prompt: request.prompt, resolution: request.resolution, size: request.size, seconds: request.seconds };
-    if (image) {
+    if (images.length > 0 || videos.length > 0 || audios.length > 0) {
       const body = new FormData();
       for (const [key, value] of Object.entries(common)) body.append(key, String(value));
-      body.append('reference_images', new Blob([image.buffer], { type: image.mimeType }), image.filename);
+      appendMediaFiles(body, 'reference_images', images);
+      appendMediaFiles(body, 'reference_videos', videos);
+      appendMediaFiles(body, 'reference_audios', audios);
       return { path: '/v1/videos/generations', init: { method: 'POST', headers: authorization, body } };
     }
     return { path: '/v1/videos/generations', init: { method: 'POST', headers: { ...authorization, 'Content-Type': 'application/json' }, body: JSON.stringify(common) } };
@@ -90,7 +101,7 @@ function createVideoRequest(protocol, apiKey, request, files) {
     const referenceVideos = videos.map(toMediaDataUrl);
     const referenceAudios = audios.map(toMediaDataUrl);
     const metadata = {
-      resolution: `${request.resolution}p`,
+      resolution: formatVideoResolution(request.resolution),
     };
     if (referenceVideos.length > 0) metadata.reference_videos = referenceVideos;
     if (referenceAudios.length > 0) metadata.reference_audios = referenceAudios;
@@ -112,7 +123,7 @@ function createVideoRequest(protocol, apiKey, request, files) {
     };
   }
 
-  const payload = { model: request.model, prompt: request.prompt, duration: request.seconds, resolution: `${request.resolution}p`, aspect_ratio: request.aspectRatio };
+  const payload = { model: request.model, prompt: request.prompt, duration: request.seconds, resolution: formatVideoResolution(request.resolution), aspect_ratio: request.aspectRatio };
   const imageDataUrl = toMediaDataUrl(image);
   if (imageDataUrl) payload.image = imageDataUrl;
   return {
@@ -171,6 +182,7 @@ function normalizeVideoPollResult(protocol, data, baseUrl, taskId) {
 
 module.exports = {
   createVideoRequest,
+  formatVideoResolution,
   getCreatedVideoTaskId,
   getVideoDownloadHeaders,
   getVideoPollPath,

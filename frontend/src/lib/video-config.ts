@@ -45,10 +45,10 @@ export interface VideoWorkspaceConfig {
 }
 
 export const DEFAULT_VIDEO_WORKSPACE_CONFIG: VideoWorkspaceConfig = {
-  maxRefImages: 5,
-  maxRefVideos: 5,
-  maxRefAudios: 5,
-  resolutions: [720, 480],
+  maxRefImages: 9,
+  maxRefVideos: 3,
+  maxRefAudios: 3,
+  resolutions: [720, 480, 1080, 2160],
   sizes: ['1280x720', '720x1280', '1024x1024', '1792x1024', '1024x1792', 'auto'],
   durations: [6, 10, 12, 15, 20],
   maxReferenceVideoBytes: 104857600,
@@ -185,6 +185,15 @@ export function resolveVideoProtocolProfile(protocol: VideoProtocol, modelId: st
  */
 export function isValidVideoResolution(value: number): boolean {
   return Number.isInteger(value) && value >= 144 && value <= 4320;
+}
+
+/**
+ * 返回视频工作台用于按钮和任务信息的清晰度标签。
+ * @param value 内部保存的垂直清晰度数值，2160 代表 4K。
+ * @returns 2160 显示为 4K，其余值显示为带 p 后缀的清晰度。
+ */
+export function getVideoResolutionLabel(value: number): string {
+  return value === 2160 ? '4K' : `${value}p`;
 }
 
 /**

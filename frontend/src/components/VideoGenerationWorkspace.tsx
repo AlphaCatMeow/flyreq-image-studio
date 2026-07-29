@@ -23,7 +23,7 @@ import {
   saveVideoJobs,
   type StoredVideoJob,
 } from '@/lib/video-job-store';
-import { getVideoProtocolDurations, getVideoWorkspaceConfig, isAllowedVideoReferenceMimeType, isValidVideoDuration, isValidVideoProtocolDuration, isValidVideoResolution, isValidVideoSize, resolveVideoProtocolProfile } from '@/lib/video-config';
+import { getVideoProtocolDurations, getVideoResolutionLabel, getVideoWorkspaceConfig, isAllowedVideoReferenceMimeType, isValidVideoDuration, isValidVideoProtocolDuration, isValidVideoResolution, isValidVideoSize, resolveVideoProtocolProfile } from '@/lib/video-config';
 import { generateModelId } from '@/lib/flyreq-models';
 import { requireDefaultConfiguredTextModel } from '@/lib/model-endpoints';
 import { streamPromptOptimize, type StreamPromptOptimizeHandle } from '@/lib/prompt-optimize-client';
@@ -708,21 +708,22 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
    * @returns 无返回值。
    */
   const restoreJob = useCallback((job: StoredVideoJob) => {
+    const restoredModel = models.find(model => model.id === job.modelId);
+    const restoredProfile = resolveVideoProtocolProfile(restoredModel?.protocol || 'new-api', restoredModel ? getResolvedVideoModelId(restoredModel) : '', false);
     setPrompt(job.prompt);
     setModelId(job.modelId);
     setResolution(job.resolution);
     setVideoSize(job.videoSize);
     setAspectRatio(job.aspectRatio || '16:9');
     setSeconds(job.seconds);
-    setResolutionMode(config.resolutions.includes(job.resolution) ? 'preset' : 'custom');
-    if (!config.resolutions.includes(job.resolution)) setCustomResolution(String(job.resolution));
+    const resolutionIsPreset = restoredProfile.parameters.resolution.values.includes(job.resolution);
+    setResolutionMode(resolutionIsPreset ? 'preset' : 'custom');
+    if (!resolutionIsPreset) setCustomResolution(String(job.resolution));
     setSizeMode(config.sizes.includes(job.videoSize) ? 'preset' : 'custom');
     if (!config.sizes.includes(job.videoSize) && job.videoSize !== 'auto') {
       const [width, height] = job.videoSize.split('x');
       setCustomWidth(width); setCustomHeight(height);
     }
-    const restoredModel = models.find(model => model.id === job.modelId);
-    const restoredProfile = resolveVideoProtocolProfile(restoredModel?.protocol || 'new-api', restoredModel ? getResolvedVideoModelId(restoredModel) : '', false);
     const restoredDurations = getVideoProtocolDurations(restoredProfile);
     setDurationMode(restoredDurations.includes(job.seconds) ? 'preset' : 'custom');
     if (!restoredDurations.includes(job.seconds)) setCustomSeconds(String(job.seconds));
@@ -816,7 +817,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
                   {resolutionCapability.visible && <div className="min-w-0 space-y-1.5">
                     <span className="flex h-5 items-center gap-1 text-xs font-medium text-muted-foreground"><ScanLine data-testid="video-resolution-icon" className="size-3" />{t('video.resolution')}</span>
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                      {resolutionCapability.values.map(value => <button type="button" key={value} className={cn(parameterButton, resolutionMode === 'preset' && activeProtocolResolution === value && 'border-primary bg-primary/10 text-primary')} onClick={() => { setResolution(value); setResolutionMode('preset'); }}>{value}p</button>)}
+                      {resolutionCapability.values.map(value => <button type="button" key={value} className={cn(parameterButton, resolutionMode === 'preset' && activeProtocolResolution === value && 'border-primary bg-primary/10 text-primary')} onClick={() => { setResolution(value); setResolutionMode('preset'); }}>{getVideoResolutionLabel(value)}</button>)}
                       {resolutionCapability.allowCustom && <Input className="h-7 w-24 shrink-0 rounded-md px-2 text-xs" inputMode="numeric" value={customResolution} placeholder={t('video.customResolution')} onChange={event => { setCustomResolution(event.target.value); const value = Number(event.target.value); if (isValidVideoResolution(value)) { setResolution(value); setResolutionMode('custom'); } }} />}
                     </div>
                   </div>}
@@ -924,7 +925,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
               <p className="line-clamp-3 text-sm">{job.prompt}</p>
               <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-y py-2 text-xs sm:grid-cols-4">
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.modelName')}</dt><dd className="truncate font-medium text-foreground" title={job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}>{job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}</dd></div>
-                <div className="min-w-0"><dt className="text-muted-foreground">{t('video.resolution')}</dt><dd className="font-medium text-foreground">{job.resolution}p</dd></div>
+                <div className="min-w-0"><dt className="text-muted-foreground">{t('video.resolution')}</dt><dd className="font-medium text-foreground">{getVideoResolutionLabel(job.resolution)}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.totalDuration')}</dt><dd className="font-medium text-foreground">{formatVideoJobDuration(job.durationMs, job.durationUpdatedAt, job.status === '排队中' || job.status === 'processing', job.createdAt, job.completedAt, durationNowMs, locale)}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.seconds')}</dt><dd className="flex items-center gap-1 font-medium text-foreground"><Clock3 className="size-3" />{job.seconds}s</dd></div>
                 <div className="col-span-2 min-w-0 sm:col-span-4"><dt className="text-muted-foreground">{t('video.taskId')}</dt><dd className="select-all break-all font-mono text-[11px] text-foreground">{job.serverTaskId || t('video.taskIdPending')}</dd></div>

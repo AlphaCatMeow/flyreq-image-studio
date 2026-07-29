@@ -6,6 +6,7 @@ const ALL_VIDEO_PROTOCOLS = new Set([...PUBLIC_VIDEO_PROTOCOLS, 'legacy-openai-v
 const MAX_VIDEO_DURATION_SECONDS = 60;
 const MIN_VIDEO_RESOLUTION = 144;
 const MAX_VIDEO_RESOLUTION = 4320;
+const MAX_VIDEO_REFERENCE_FILES = 20;
 let cachedOverride = null;
 let cachedConfig = null;
 
@@ -93,7 +94,7 @@ function validateProtocolProfile(protocol, profile) {
   if (!profile.settings || !String(profile.settings.baseUrl || '').trim() || typeof profile.settings.presetModelId !== 'string') throw new Error(`视频协议设置模板无效: ${protocol}`);
   if (profile.createEndpoint?.method !== 'POST' || !/^\/v1\/[a-z0-9/-]+$/.test(String(profile.createEndpoint?.path || ''))) throw new Error(`视频协议创建接口无效: ${protocol}`);
   if (!parameters?.duration || !parameters?.size || !parameters?.aspectRatio || !parameters?.resolution) throw new Error(`视频协议参数不完整: ${protocol}`);
-  if (!references || !Number.isInteger(references.images) || references.images < 0 || references.images > 5 || !Number.isInteger(references.videos) || references.videos < 0 || references.videos > 5 || !Number.isInteger(references.audios) || references.audios < 0 || references.audios > 5) throw new Error(`视频协议附件限制无效: ${protocol}`);
+  if (!references || !Number.isInteger(references.images) || references.images < 0 || references.images > MAX_VIDEO_REFERENCE_FILES || !Number.isInteger(references.videos) || references.videos < 0 || references.videos > MAX_VIDEO_REFERENCE_FILES || !Number.isInteger(references.audios) || references.audios < 0 || references.audios > MAX_VIDEO_REFERENCE_FILES) throw new Error(`视频协议附件限制无效: ${protocol}`);
   if (!Array.isArray(references.imageMimeTypes) || references.imageMimeTypes.length === 0 || references.imageMimeTypes.some(value => !isValidConfiguredMediaMimeType(value, 'image')) || !Array.isArray(references.videoMimeTypes) || references.videoMimeTypes.length === 0 || references.videoMimeTypes.some(value => !isValidConfiguredMediaMimeType(value, 'video')) || !Array.isArray(references.audioMimeTypes) || references.audioMimeTypes.length === 0 || references.audioMimeTypes.some(value => !isValidConfiguredMediaMimeType(value, 'audio')) || typeof references.imageSizeMustMatchOutput !== 'boolean') throw new Error(`视频协议参考附件配置无效: ${protocol}`);
   const duration = parameters.duration;
   if (!['enum', 'range'].includes(duration.mode) || !Array.isArray(duration.presets) || duration.presets.length === 0) throw new Error(`视频协议时长配置无效: ${protocol}`);
@@ -240,23 +241,26 @@ async function validateVideoProtocolReferences(profile, request, files) {
   if (files.images.some(file => !isAllowedMediaMimeType(file.mimeType, profile.references.imageMimeTypes))) throw new Error('参考图格式不符合当前协议限制');
   if (files.videos.some(file => !isAllowedMediaMimeType(file.mimeType, profile.references.videoMimeTypes))) throw new Error('参考视频格式不符合当前协议限制');
   if (files.audios.some(file => !isAllowedMediaMimeType(file.mimeType, profile.references.audioMimeTypes))) throw new Error('参考音频格式不符合当前协议限制');
-  const image = files.images[0];
-  if (!image) return;
+  if (files.images.length === 0) return;
   if (!profile.references.imageSizeMustMatchOutput) return;
   const target = String(request.size || '').match(/^(\d+)x(\d+)$/);
   if (!target) throw new Error('当前协议要求明确的视频尺寸');
-  let metadata;
-  try {
-    metadata = await sharp(image.buffer).metadata();
-  } catch {
-    throw new Error('参考图内容无效');
-  }
-  const detectedMimeType = metadata.format === 'jpeg' ? 'image/jpeg' : `image/${metadata.format || 'unknown'}`;
-  if (!isAllowedMediaMimeType(detectedMimeType, profile.references.imageMimeTypes)) throw new Error('参考图实际格式不符合当前协议限制');
   const expectedWidth = Number(target[1]);
   const expectedHeight = Number(target[2]);
-  if (metadata.width !== expectedWidth || metadata.height !== expectedHeight) {
-    throw new Error(`参考图尺寸必须与视频尺寸一致（需要 ${expectedWidth}x${expectedHeight}，实际 ${metadata.width || 0}x${metadata.height || 0}）`);
+
+  // 逐张读取实际像素信息，防止只有第一张参考图通过校验、后续图片绕过格式或尺寸约束。
+  for (const [index, image] of files.images.entries()) {
+    let metadata;
+    try {
+      metadata = await sharp(image.buffer).metadata();
+    } catch {
+      throw new Error(`第 ${index + 1} 张参考图内容无效`);
+    }
+    const detectedMimeType = metadata.format === 'jpeg' ? 'image/jpeg' : `image/${metadata.format || 'unknown'}`;
+    if (!isAllowedMediaMimeType(detectedMimeType, profile.references.imageMimeTypes)) throw new Error(`第 ${index + 1} 张参考图实际格式不符合当前协议限制`);
+    if (metadata.width !== expectedWidth || metadata.height !== expectedHeight) {
+      throw new Error(`第 ${index + 1} 张参考图尺寸必须与视频尺寸一致（需要 ${expectedWidth}x${expectedHeight}，实际 ${metadata.width || 0}x${metadata.height || 0}）`);
+    }
   }
 }
 
