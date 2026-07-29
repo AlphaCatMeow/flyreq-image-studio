@@ -23,6 +23,7 @@ import {
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const serverSource = fs.readFileSync(path.resolve(testDir, '../../../../backend/server.js'), 'utf8');
+const videoTaskClientSource = fs.readFileSync(path.resolve(testDir, '../video-task-client.ts'), 'utf8');
 
 describe('视频模型注册表与工作台配置', () => {
   afterEach(() => {
@@ -207,6 +208,12 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain("logVideoUpstreamResponse('create'");
     expect(serverSource).toContain("logVideoUpstreamResponse('poll'");
     expect(serverSource).toContain("logVideoUpstreamResponse('download'");
+    expect(serverSource).toContain('taskId: trace.taskId');
+    expect(serverSource).toContain('modelName: trace.modelName');
+    expect(serverSource).toContain('resolution: `${trace.resolution}p`');
+    expect(serverSource).toContain('totalDurationMs: Math.max(0, Date.now() - startedAtMs)');
+    expect(serverSource).toContain('logVideoTaskSummary({');
+    expect(videoTaskClientSource).toContain("formData.set('modelName', input.model.name)");
     expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED');
     expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS');
     expect(serverSource).not.toContain('logVideoUpstreamFailure');

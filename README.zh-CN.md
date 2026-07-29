@@ -238,7 +238,7 @@ https://image.flyreq.com/zh/?provider={"type":"video","protocol":"openai","model
 
 配置完整时，视频模型会成为视频生成默认模型。视频外链接受 `new-api`、`openai` 与 `xai` 三种协议。新链接必须使用显式 `protocol` 字段；历史 `provider=openai` 格式继续映射到旧版视频端点。
 
-视频上游每次创建、轮询和结果下载的请求与响应都会输出 `[video-upstream]` 结构化日志，并按本地日期写入 `backend/logs/video-upstream/video-upstream-YYYY-MM-DD.log` JSONL 文件。日志包含请求阶段、方法、URL、HTTP 状态、请求头、请求参数、响应头、响应正文和任务上下文。API Key、认证头、Cookie、签名查询参数会自动脱敏；data URL 与 multipart 媒体只记录类型、名称和字节数，成功下载的视频流不会被读取或写入日志。日志默认开启，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED=false` 关闭；单条响应正文默认最多记录 65536 字符，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` 调整，落盘目录可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` 修改。Docker Compose 默认将宿主机 `./logs` 挂载到 `/app/backend/logs`，并使用 `Asia/Shanghai` 时区分割日期。
+视频上游每次创建、轮询和结果下载的请求与响应都会输出 `[video-upstream]` 结构化日志，并按本地日期写入 `backend/logs/video-upstream/video-upstream-YYYY-MM-DD.log` JSONL 文件。每条阶段日志都包含本地 `taskId`、模型显示名称、上游模型 ID、清晰度和当前耗时；任务完成、失败或取消时还会写入 `task-summary` 终态记录及精确的 `totalDurationMs` 总耗时。日志同时包含请求阶段、方法、URL、HTTP 状态、请求头、请求参数、响应头、响应正文和任务上下文。API Key、认证头、Cookie、签名查询参数会自动脱敏；data URL 与 multipart 媒体只记录类型、名称和字节数；`Content-Type` 为 `video/*` 的响应只记录媒体类型和字节数占位符，不会写入视频正文。日志默认开启，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED=false` 关闭；单条普通响应正文默认最多记录 65536 字符，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` 调整，落盘目录可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` 修改。Docker Compose 默认将宿主机 `./logs` 挂载到 `/app/backend/logs`，并使用 `Asia/Shanghai` 时区分割日期。
 
 #### 字段与行为
 

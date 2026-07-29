@@ -86,6 +86,33 @@ describe('视频上游日志脱敏', () => {
     expect(logger.sanitizeVideoLogUrl('not-a-url?token=%E0%A4%A')).not.toContain('%E0%A4%A');
   });
 
+  it('视频响应只记录类型和字节数占位符，不输出媒体正文', () => {
+    const binaryBody = 'large-binary-video-response';
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const response = {
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({
+        'content-type': 'video/mp4',
+        'content-length': '10485760',
+      }),
+    };
+
+    logger.logVideoUpstreamResponse(
+      'download',
+      'https://upstream.example/result.mp4',
+      response,
+      binaryBody,
+      { taskId: 'task-video-response' },
+      { enabled: true },
+    );
+
+    const logText = info.mock.calls.flat().join('\n');
+    expect(logText).toContain('<视频响应正文已省略；类型=video/mp4；字节数=10485760>');
+    expect(logText).not.toContain(binaryBody);
+  });
+
   it('按本地日期生成确定的日志文件名', () => {
     const date = new Date(2026, 6, 29, 23, 59, 59);
     const filePath = logger.getVideoUpstreamLogFilePath('C:/logs/video-upstream', date);

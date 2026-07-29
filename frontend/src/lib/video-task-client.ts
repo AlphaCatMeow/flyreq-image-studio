@@ -44,6 +44,7 @@ export async function createVideoTask(input: CreateVideoTaskInput): Promise<stri
   formData.set('baseUrl', input.model.baseUrl);
   formData.set('protocol', input.model.protocol);
   formData.set('model', getResolvedVideoModelId(input.model));
+  formData.set('modelName', input.model.name);
   formData.set('prompt', input.prompt);
   formData.set('resolution', String(input.resolution));
   formData.set('size', input.size);

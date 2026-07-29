@@ -17,6 +17,7 @@ const {
   isVideoUpstreamLogEnabled,
   logVideoUpstreamRequest,
   logVideoUpstreamResponse,
+  logVideoTaskSummary,
 } = require('./video-upstream-logger');
 
 const ENV_FILE_PATHS = [...new Set([
@@ -1498,6 +1499,7 @@ async function normalizeVideoTaskPayload(fields, files) {
     apiKey: String(fields.apiKey).trim(),
     baseUrl: normalizeProtocolBaseUrl('openai', fields.baseUrl),
     model: String(fields.model).trim(),
+    modelName: String(fields.modelName || fields.model).trim().slice(0, 200),
     prompt: String(fields.prompt).trim(),
     resolution,
     size,
@@ -1513,6 +1515,23 @@ async function normalizeVideoTaskPayload(fields, files) {
   const profile = validateVideoProtocolRequest(resolveVideoProtocolConfig(getRuntimeEnv()), protocol, payload.model, payload, files);
   await validateVideoProtocolReferences(profile, payload, files);
   return payload;
+}
+
+/**
+ * 构建视频任务的统一日志上下文，并计算从任务创建至当前阶段的耗时。
+ * @param {{ taskId: string, modelName: string, model: string, resolution: number, startedAtMs: number }} trace 任务追踪基础信息。
+ * @param {Record<string, unknown>} [extra] 当前阶段需要补充的诊断字段。
+ * @returns {Record<string, unknown>} 可直接交给脱敏日志模块的追踪上下文。
+ */
+function getVideoTaskLogContext(trace, extra = {}) {
+  return {
+    taskId: trace.taskId,
+    modelName: trace.modelName,
+    model: trace.model,
+    resolution: `${trace.resolution}p`,
+    elapsedMs: Math.max(0, Date.now() - trace.startedAtMs),
+    ...extra,
+  };
 }
 
 /**
@@ -2370,15 +2389,16 @@ function createVideoTask(payload, files, req) {
  * @param request 视频生成参数。
  * @param files 已校验的参考附件。
  * @param {AbortSignal} signal 视频任务中止信号。
+ * @param {{ taskId: string, modelName: string, model: string, resolution: number, startedAtMs: number }} trace 视频任务日志追踪信息。
  * @returns 上游视频任务标识。
  */
-async function createUpstreamVideo(apiKey, request, files, signal) {
+async function createUpstreamVideo(apiKey, request, files, signal, trace) {
   const baseUrl = resolveAndLogOutboundBaseUrl('视频生成', 'openai', request.baseUrl).baseUrl;
   const upstreamRequest = createVideoRequest(request.protocol, apiKey, request, files);
   const url = appendProtocolApiPath('openai', baseUrl, upstreamRequest.path);
   const fetchInit = { ...upstreamRequest.init, signal };
   const logOptions = getVideoUpstreamLogOptions();
-  const context = { protocol: request.protocol, model: request.model };
+  const context = getVideoTaskLogContext(trace, { protocol: request.protocol });
   logVideoUpstreamRequest('create', url, fetchInit, context, logOptions);
   const response = await fetchWithTimeout(url, fetchInit);
   const responseText = await response.text();
@@ -2400,9 +2420,10 @@ async function createUpstreamVideo(apiKey, request, files, signal) {
  * @param request 视频生成参数。
  * @param upstreamTaskId 上游视频任务标识。
  * @param {AbortSignal} signal 视频任务中止信号。
+ * @param {{ taskId: string, modelName: string, model: string, resolution: number, startedAtMs: number }} trace 视频任务日志追踪信息。
  * @returns 完成视频的远程 URL 与允许携带认证头的实际上游来源。
  */
-async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
+async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal, trace) {
   const env = getRuntimeEnv();
   const intervalMs = parseIntegerEnv(env.FLYREQ_VIDEO_POLL_INTERVAL_MS, 5000, { min: 1000, max: 60000 });
   const timeoutMs = parseIntegerEnv(env.FLYREQ_VIDEO_TIMEOUT_MS, 1800000, { min: 10000, max: 24 * 60 * 60 * 1000 });
@@ -2410,9 +2431,9 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
   const url = appendProtocolApiPath('openai', baseUrl, getVideoPollPath(request.protocol, upstreamTaskId));
   const deadline = Date.now() + timeoutMs;
   const logOptions = getVideoUpstreamLogOptions();
-  const context = { protocol: request.protocol, model: request.model, upstreamTaskId };
   while (Date.now() < deadline) {
     signal.throwIfAborted();
+    const context = getVideoTaskLogContext(trace, { protocol: request.protocol, upstreamTaskId });
     const fetchInit = { headers: { Authorization: `Bearer ${apiKey}` }, signal };
     logVideoUpstreamRequest('poll', url, fetchInit, context, logOptions);
     const response = await fetchWithTimeout(url, fetchInit);
@@ -2442,14 +2463,15 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
  * @param apiKey 下载视频时使用的 API Key。
  * @param authenticatedOrigin 允许携带认证头的实际上游来源。
  * @param {AbortSignal} signal 视频任务中止信号。
+ * @param {{ taskId: string, modelName: string, model: string, resolution: number, startedAtMs: number }} trace 视频任务日志追踪信息。
  * @returns 站内视频播放地址。
  */
-async function cacheVideoResult(taskId, remoteUrl, apiKey, authenticatedOrigin, signal) {
+async function cacheVideoResult(taskId, remoteUrl, apiKey, authenticatedOrigin, signal, trace) {
   const resultUrl = new URL(remoteUrl);
   const headers = getVideoDownloadHeaders(resultUrl.toString(), authenticatedOrigin, apiKey);
   const fetchInit = { headers, signal };
   const logOptions = getVideoUpstreamLogOptions();
-  const context = { taskId };
+  const context = getVideoTaskLogContext(trace);
   logVideoUpstreamRequest('download', resultUrl, fetchInit, context, logOptions);
   const response = await fetchWithTimeout(resultUrl.toString(), fetchInit);
   if (!response.ok || !response.body) {
@@ -2485,13 +2507,21 @@ async function runVideoTask(taskId) {
     return;
   }
   const request = JSON.parse(task.request_json);
+  const startedAtMs = Number.isFinite(Date.parse(task.created_at)) ? Date.parse(task.created_at) : Date.now();
+  const trace = {
+    taskId,
+    modelName: request.modelName || request.model,
+    model: request.model,
+    resolution: request.resolution,
+    startedAtMs,
+  };
   db.prepare("UPDATE tasks SET status = 'processing' WHERE id = ?").run(taskId);
   broadcastTask(taskId);
   broadcastQueueStatus();
   try {
-    const upstreamTaskId = await createUpstreamVideo(apiKey, request, files, abortController.signal);
-    const { remoteUrl, authenticatedOrigin } = await pollUpstreamVideo(apiKey, request, upstreamTaskId, abortController.signal);
-    const videoUrl = await cacheVideoResult(taskId, remoteUrl, apiKey, authenticatedOrigin, abortController.signal);
+    const upstreamTaskId = await createUpstreamVideo(apiKey, request, files, abortController.signal, trace);
+    const { remoteUrl, authenticatedOrigin } = await pollUpstreamVideo(apiKey, request, upstreamTaskId, abortController.signal, trace);
+    const videoUrl = await cacheVideoResult(taskId, remoteUrl, apiKey, authenticatedOrigin, abortController.signal, trace);
     abortController.signal.throwIfAborted();
     const completedAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
@@ -2512,6 +2542,15 @@ async function runVideoTask(taskId) {
     }
   }
   const finalTask = db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
+  const logOptions = getVideoUpstreamLogOptions();
+  logVideoTaskSummary({
+    ...getVideoTaskLogContext(trace),
+    status: finalTask?.status || 'unknown',
+    totalDurationMs: Math.max(0, Date.now() - startedAtMs),
+  }, {
+    ...logOptions,
+    isError: ![TASK_STATUS.COMPLETED, TASK_STATUS.CANCELLED].includes(finalTask?.status),
+  });
   if (finalTask?.status === TASK_STATUS.CANCELLED) deleteTaskVideoFile(taskId);
   cleanupTaskRuntimeState(taskId);
   broadcastTask(taskId);
@@ -2524,7 +2563,7 @@ async function runVideoTask(taskId) {
  * @returns {{found: boolean, cancelled: boolean}} 是否找到任务以及是否成功取消。
  */
 function cancelVideoTask(taskId) {
-  const task = db.prepare('SELECT id, status FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation');
+  const task = db.prepare('SELECT id, status, request_json, created_at FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation');
   if (!task) return { found: false, cancelled: false };
   if (![TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED, TASK_STATUS.PROCESSING].includes(task.status)) {
     return { found: true, cancelled: false };
@@ -2535,6 +2574,21 @@ function cancelVideoTask(taskId) {
   const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
   db.prepare('UPDATE tasks SET status = ?, error = ?, completed_at = ?, expires_at = ? WHERE id = ?')
     .run(TASK_STATUS.CANCELLED, '视频任务已取消', completedAt, expiresAt, taskId);
+
+  // 排队任务不会进入 runVideoTask，因此在这里补写唯一的终态摘要；处理中任务由执行器统一记录，避免重复日志。
+  if ([TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED].includes(task.status)) {
+    const request = parseJsonSafely(task.request_json) || {};
+    const startedAtMs = Number.isFinite(Date.parse(task.created_at)) ? Date.parse(task.created_at) : Date.now();
+    logVideoTaskSummary({
+      taskId,
+      modelName: request.modelName || request.model || '',
+      model: request.model || '',
+      resolution: request.resolution ? `${request.resolution}p` : '',
+      status: TASK_STATUS.CANCELLED,
+      elapsedMs: Math.max(0, Date.now() - startedAtMs),
+      totalDurationMs: Math.max(0, Date.now() - startedAtMs),
+    }, getVideoUpstreamLogOptions());
+  }
 
   // 第二步从等待队列移除任务，并中止本地正在进行的上游创建、轮询或缓存请求。
   // 当前兼容协议没有定义统一的上游取消端点，因此任务已提交上游后只能停止本地继续处理。

@@ -286,6 +286,31 @@ function summarizeVideoResponseBody(responseText, maxChars) {
 }
 
 /**
+ * 判断上游响应是否为视频媒体。
+ * @param {Headers|Record<string, unknown>|undefined} headers 上游响应头。
+ * @returns {boolean} Content-Type 为 video/* 时返回 true。
+ */
+function isVideoUpstreamMediaResponse(headers) {
+  const summarizedHeaders = summarizeVideoRequestHeaders(headers);
+  const contentTypeEntry = Object.entries(summarizedHeaders).find(([key]) => key.toLowerCase() === 'content-type');
+  return /^video\//i.test(String(contentTypeEntry?.[1] || '').trim());
+}
+
+/**
+ * 为视频响应生成不包含媒体正文的日志占位符。
+ * @param {Headers|Record<string, unknown>|undefined} headers 上游响应头。
+ * @returns {string} 包含媒体类型和可用字节数的视频正文占位符。
+ */
+function summarizeVideoMediaResponse(headers) {
+  const summarizedHeaders = summarizeVideoRequestHeaders(headers);
+  const entries = Object.entries(summarizedHeaders);
+  const contentType = entries.find(([key]) => key.toLowerCase() === 'content-type')?.[1] || 'video/unknown';
+  const contentLength = entries.find(([key]) => key.toLowerCase() === 'content-length')?.[1];
+  const byteSummary = contentLength === undefined || contentLength === '' ? '未知' : String(contentLength);
+  return `<视频响应正文已省略；类型=${contentType}；字节数=${byteSummary}>`;
+}
+
+/**
  * 记录一次视频上游请求。
  * @param {string} stage 创建、轮询或下载阶段。
  * @param {string|URL} url 上游请求地址。
@@ -321,6 +346,7 @@ function logVideoUpstreamRequest(stage, url, init = {}, context = {}, options = 
 function logVideoUpstreamResponse(stage, url, response, responseText, context = {}, options = {}) {
   if (options.enabled === false) return;
   const maxChars = getVideoUpstreamLogMaxChars(options.maxChars);
+  const isVideoResponse = isVideoUpstreamMediaResponse(response.headers);
   const diagnostics = sanitizeVideoLogValue({
     stage,
     url: sanitizeVideoLogUrl(url),
@@ -328,12 +354,29 @@ function logVideoUpstreamResponse(stage, url, response, responseText, context = 
     statusText: response.statusText,
     headers: summarizeVideoRequestHeaders(response.headers),
     context,
-    body: summarizeVideoResponseBody(responseText, maxChars),
+    body: isVideoResponse
+      ? summarizeVideoMediaResponse(response.headers)
+      : summarizeVideoResponseBody(responseText, maxChars),
   });
   const isError = Boolean(options.isError || !response.ok);
   const logger = isError ? console.error : console.info;
   logger('[video-upstream] 上游响应\n' + JSON.stringify(diagnostics, null, 2));
   appendVideoUpstreamLog('response', isError ? 'error' : 'info', diagnostics, options);
+}
+
+/**
+ * 记录视频任务终态摘要，便于按本地任务标识回溯完整执行结果。
+ * @param {Record<string, unknown>} context 任务标识、模型、清晰度、终态和总耗时。
+ * @param {{ enabled?: boolean, logDir?: string, isError?: boolean }} [options] 日志开关、落盘目录和错误级别。
+ * @returns {void} 无返回值；启用时写入控制台和当天日志文件。
+ */
+function logVideoTaskSummary(context, options = {}) {
+  if (options.enabled === false) return;
+  const diagnostics = sanitizeVideoLogValue(context);
+  const isError = Boolean(options.isError);
+  const logger = isError ? console.error : console.info;
+  logger('[video-task] 任务终态\n' + JSON.stringify(diagnostics, null, 2));
+  appendVideoUpstreamLog('task-summary', isError ? 'error' : 'info', diagnostics, options);
 }
 
 module.exports = {
@@ -343,14 +386,17 @@ module.exports = {
   getVideoUpstreamLogFilePath,
   getVideoUpstreamLogMaxChars,
   isSensitiveVideoLogKey,
+  isVideoUpstreamMediaResponse,
   isVideoUpstreamLogEnabled,
   logVideoUpstreamRequest,
   logVideoUpstreamResponse,
+  logVideoTaskSummary,
   maskVideoApiKey,
   sanitizeVideoLogText,
   sanitizeVideoLogUrl,
   sanitizeVideoLogValue,
   summarizeVideoRequestBody,
   summarizeVideoRequestHeaders,
+  summarizeVideoMediaResponse,
   summarizeVideoResponseBody,
 };
