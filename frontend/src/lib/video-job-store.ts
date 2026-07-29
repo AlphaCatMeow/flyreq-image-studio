@@ -12,6 +12,7 @@ export interface StoredVideoJob {
   status: '排队中' | 'processing' | 'completed' | 'failed' | 'cancelled';
   prompt: string;
   modelId: string;
+  modelName?: string;
   protocol?: VideoProtocol;
   resolution: number;
   videoSize: string;

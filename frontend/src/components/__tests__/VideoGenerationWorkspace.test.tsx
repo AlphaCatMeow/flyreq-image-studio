@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LanguageProvider } from '@/components/LanguageProvider';
 import { VideoGenerationWorkspace } from '@/components/VideoGenerationWorkspace';
@@ -281,6 +281,38 @@ describe('VideoGenerationWorkspace', () => {
 
     expect(await screen.findByText('The locally cached video is missing. Retry the task to generate it again.')).toBeInTheDocument();
     await waitFor(() => expect(restoreVideoBlobUrl).toHaveBeenCalledOnce());
+  });
+
+  it('在视频任务卡片展示服务端任务 ID、模型名称、清晰度和总耗时', () => {
+    localStorage.setItem('flyreq-video-jobs', JSON.stringify([{
+      id: 'local-video-job',
+      serverTaskId: 'server-traceable-task-id',
+      status: 'completed',
+      prompt: 'Traceable video task',
+      modelId: 'video-test',
+      modelName: 'Video Test',
+      protocol: 'openai',
+      resolution: 1080,
+      videoSize: '1920x1080',
+      seconds: 12,
+      referenceVideos: [],
+      referenceAudios: [],
+      referenceImages: [],
+      createdAt: '2026-07-29T08:00:00.000Z',
+      completedAt: '2026-07-29T08:01:05.000Z',
+    }]));
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    const taskCard = screen.getByText('server-traceable-task-id').closest('article');
+    expect(taskCard).not.toBeNull();
+    expect(within(taskCard!).getByText('Video Test')).toBeInTheDocument();
+    expect(within(taskCard!).getByText('1080p')).toBeInTheDocument();
+    expect(within(taskCard!).getByText('1m 5s')).toBeInTheDocument();
   });
 
   it('releases a restored video URL when the workspace unmounts before restoration finishes', async () => {

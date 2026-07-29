@@ -189,6 +189,32 @@ function formatJobTime(value: string, locale: 'en' | 'zh'): string {
 }
 
 /**
+ * 计算并格式化视频任务从创建到当前或终态的总耗时。
+ * @param createdAt 任务创建时间。
+ * @param completedAt 任务终态时间；活动任务为空。
+ * @param nowMs 当前时间戳，用于实时更新活动任务。
+ * @param locale 当前界面语言。
+ * @returns 紧凑的本地化时分秒文本。
+ */
+function formatVideoJobDuration(createdAt: string, completedAt: string | undefined, nowMs: number, locale: 'en' | 'zh'): string {
+  const startedAtMs = Date.parse(createdAt);
+  const finishedAtMs = completedAt ? Date.parse(completedAt) : nowMs;
+  if (!Number.isFinite(startedAtMs) || !Number.isFinite(finishedAtMs)) return '--';
+  const totalSeconds = Math.max(0, Math.floor((finishedAtMs - startedAtMs) / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (locale === 'zh') {
+    if (hours > 0) return `${hours}小时${minutes}分${seconds}秒`;
+    if (minutes > 0) return `${minutes}分${seconds}秒`;
+    return `${seconds}秒`;
+  }
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+/**
  * 渲染完整的视频生成工作台和任务历史。
  * @param props 宽屏状态、设置入口和全局提示回调。
  * @returns 响应式视频工作台。
@@ -216,6 +242,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const [customSeconds, setCustomSeconds] = useState('');
   const [durationMode, setDurationMode] = useState<'preset' | 'custom'>('preset');
   const [jobs, setJobs] = useState<StoredVideoJob[]>(() => loadVideoJobs());
+  const [durationNowMs, setDurationNowMs] = useState(() => Date.now());
   const [submitting, setSubmitting] = useState(false);
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(new Set());
   const [dragging, setDragging] = useState(false);
@@ -229,6 +256,13 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const promptOptimizeUsable = promptOptimizeEnabled && promptOptimizeAvailable;
   const { submissionShortcut, isSmallViewport, updateSubmissionShortcut } = usePromptSubmissionShortcut();
   const selectedModel = useMemo(() => models.find(model => model.id === modelId), [modelId, models]);
+
+  useEffect(() => {
+    if (!jobs.some(job => job.status === '排队中' || job.status === 'processing')) return;
+    setDurationNowMs(Date.now());
+    const timer = window.setInterval(() => setDurationNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [jobs]);
 
   /**
    * 选择视频模型并同步设置中的视频生成默认模型。
@@ -353,6 +387,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
           return {
             ...job,
             status: 'failed',
+            completedAt: job.completedAt || new Date().toISOString(),
             cached: false,
             error: t('video.cachedResultMissing'),
           };
@@ -382,9 +417,9 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
           }
           setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'completed', completedAt: task.completedAt, videoUrl, cached } : item));
         } else if (task.status === 'cancelled') {
-          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'cancelled', error: task.error || t('video.cancelled') } : item));
+          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'cancelled', completedAt: task.completedAt || new Date().toISOString(), error: task.error || t('video.cancelled') } : item));
         } else if (task.status === 'failed' || task.status === 'expired') {
-          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'failed', error: task.error || t('video.failed') } : item));
+          setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'failed', completedAt: task.completedAt || new Date().toISOString(), error: task.error || t('video.failed') } : item));
         } else {
           setJobs(current => current.map(item => item.id === job.id ? { ...item, status: task.status === 'queued' ? '排队中' : task.status as '排队中' | 'processing' } : item));
         }
@@ -519,6 +554,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
       status: '排队中',
       prompt: prompt.trim(),
       modelId: selectedModel.id,
+      modelName: selectedModel.name,
       protocol: selectedModel.protocol,
       resolution: activeProtocolResolution,
       videoSize: activeVideoSize,
@@ -539,7 +575,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
       setReferenceAudios([]);
     } catch (error) {
       const message = error instanceof Error ? error.message : t('video.failed');
-      setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'failed', error: message } : item));
+      setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'failed', completedAt: new Date().toISOString(), error: message } : item));
       showToast(message, 'error');
     } finally {
       setSubmitting(false);
@@ -873,7 +909,14 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
             {job.status === 'completed' && job.videoUrl ? <video className="aspect-video w-full bg-black object-contain" src={job.videoUrl} controls preload="metadata" /> : <div className="flex aspect-video items-center justify-center bg-muted"><div className="flex items-center gap-2 text-sm text-muted-foreground">{job.status === 'failed' || job.status === 'cancelled' ? <X className="size-5 text-destructive" /> : <Loader2 className="size-5 animate-spin" />}{job.status === 'cancelled' ? t('video.cancelled') : job.status === 'failed' ? t('video.failed') : job.status === '排队中' ? t('video.queued') : t('video.processing')}</div></div>}
             <div className="space-y-3 p-3">
               <p className="line-clamp-3 text-sm">{job.prompt}</p>
-              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">{job.protocol === 'xai' ? <><span>{job.resolution}p</span><span>{job.aspectRatio}</span></> : <span>{job.videoSize}</span>}<span className="flex items-center gap-1"><Clock3 className="size-3" />{job.seconds}s</span><span>{t('video.createdAt', { time: formatJobTime(job.createdAt, locale) })}</span></div>
+              <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-y py-2 text-xs sm:grid-cols-4">
+                <div className="min-w-0"><dt className="text-muted-foreground">{t('video.modelName')}</dt><dd className="truncate font-medium text-foreground" title={job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}>{job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}</dd></div>
+                <div className="min-w-0"><dt className="text-muted-foreground">{t('video.resolution')}</dt><dd className="font-medium text-foreground">{job.resolution}p</dd></div>
+                <div className="min-w-0"><dt className="text-muted-foreground">{t('video.totalDuration')}</dt><dd className="font-medium text-foreground">{formatVideoJobDuration(job.createdAt, job.completedAt, durationNowMs, locale)}</dd></div>
+                <div className="min-w-0"><dt className="text-muted-foreground">{t('video.seconds')}</dt><dd className="flex items-center gap-1 font-medium text-foreground"><Clock3 className="size-3" />{job.seconds}s</dd></div>
+                <div className="col-span-2 min-w-0 sm:col-span-4"><dt className="text-muted-foreground">{t('video.taskId')}</dt><dd className="select-all break-all font-mono text-[11px] text-foreground">{job.serverTaskId || t('video.taskIdPending')}</dd></div>
+              </dl>
+              <div className="flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{job.videoSize}</span>{job.protocol === 'xai' && job.aspectRatio && <span>{job.aspectRatio}</span>}<span>{t('video.createdAt', { time: formatJobTime(job.createdAt, locale) })}</span></div>
               {job.error && <p className="rounded-md bg-destructive/10 px-2 py-1.5 text-xs text-destructive">{job.error}</p>}
               <div className="flex flex-wrap gap-2">
                 {job.status === 'completed' && job.videoUrl && <a className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'gap-2')} href={job.videoUrl} download={`video-${job.id}.mp4`}><Download className="size-4" />{t('video.download')}</a>}
