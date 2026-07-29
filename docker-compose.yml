@@ -10,10 +10,13 @@ services:
       NODE_ENV: production
       FLYREQ_TASK_DB: /app/backend/data/flyreq-tasks.sqlite
       FLYREQ_IMAGE_DIR: /app/backend/data/flyreq-images
+      FLYREQ_VIDEO_UPSTREAM_LOG_DIR: /app/backend/logs/video-upstream
+      TZ: ${TZ:-Asia/Shanghai}
     ports:
       - "3001:3001"
     volumes:
       - ./data:/app/backend/data
+      - ./logs:/app/backend/logs
       - ./blacklist.json:/app/backend/blacklist.json:ro
       - ./prompts.json:/app/backend/prompts.json:ro
       - ./.env:/app/.env:ro

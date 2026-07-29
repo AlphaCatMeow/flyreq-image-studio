@@ -199,12 +199,17 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain('start === undefined || end === undefined');
   });
 
-  it('记录视频上游原始错误响应并提取结构化错误消息', () => {
-    expect(serverSource).toContain('function logVideoUpstreamFailure(stage, url, response, responseText, context = {})');
-    expect(serverSource).toContain("console.error('[video-upstream] 上游响应异常");
-    expect(serverSource).toContain("logVideoUpstreamFailure('create'");
-    expect(serverSource).toContain("logVideoUpstreamFailure('poll'");
-    expect(serverSource).toContain("logVideoUpstreamFailure('download'");
+  it('记录视频上游请求与响应并提取结构化错误消息', () => {
+    expect(serverSource).toContain("require('./video-upstream-logger')");
+    expect(serverSource).toContain("logVideoUpstreamRequest('create'");
+    expect(serverSource).toContain("logVideoUpstreamRequest('poll'");
+    expect(serverSource).toContain("logVideoUpstreamRequest('download'");
+    expect(serverSource).toContain("logVideoUpstreamResponse('create'");
+    expect(serverSource).toContain("logVideoUpstreamResponse('poll'");
+    expect(serverSource).toContain("logVideoUpstreamResponse('download'");
+    expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED');
+    expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS');
+    expect(serverSource).not.toContain('logVideoUpstreamFailure');
     expect(serverSource).toContain('const extracted = getMessageFromPayload(payload)');
     expect(serverSource).not.toContain("${data?.error || responseText || '未返回任务 ID'}");
   });

@@ -12,6 +12,12 @@ const { pipeline } = require('stream/promises');
 const { createXaiImagineRequestInit, getXaiImagineEndpoint } = require('./xai-imagine');
 const { createVideoRequest, getCreatedVideoTaskId, getVideoDownloadHeaders, getVideoPollPath, normalizeVideoPollResult } = require('./video-protocols');
 const { isPublicVideoProtocol, isVideoProtocol, resolveVideoProtocolConfig, validateVideoProtocolReferences, validateVideoProtocolRequest } = require('./video-protocol-config');
+const {
+  getVideoUpstreamLogMaxChars,
+  isVideoUpstreamLogEnabled,
+  logVideoUpstreamRequest,
+  logVideoUpstreamResponse,
+} = require('./video-upstream-logger');
 
 const ENV_FILE_PATHS = [...new Set([
   path.join(__dirname, '.env'),
@@ -1534,32 +1540,19 @@ function getVideoUpstreamErrorDetail(payload, responseText, fallback) {
 }
 
 /**
- * 记录视频上游失败响应，同时避免把签名查询参数或 API Key 写入日志。
- * @param {string} stage 视频请求阶段：创建、轮询或结果下载。
- * @param {string|URL} url 实际上游请求地址。
- * @param {Response} response 上游 HTTP 响应。
- * @param {string} responseText 上游原始响应文本。
- * @param {Record<string, string>} [context] 任务 ID 等不敏感诊断上下文。
- * @returns 无返回值；诊断信息写入服务端错误日志。
+ * 从运行时环境变量读取视频上游日志配置。
+ * @returns {{ enabled: boolean, maxChars: number, logDir: string|undefined }} 日志开关、单条响应正文的最大字符数和落盘目录。
  */
-function logVideoUpstreamFailure(stage, url, response, responseText, context = {}) {
-  const maxChars = parseIntegerEnv(getRuntimeEnv().FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS, 65536, { min: 1024, max: 1024 * 1024 });
-  const rawBody = String(responseText || '');
-  const loggedBody = rawBody.length > maxChars
-    ? `${rawBody.slice(0, maxChars)}\n...[响应已截断，原始字符数=${rawBody.length}]`
-    : rawBody;
-  const diagnostics = {
-    stage,
-    url: getSafeUrlLabel(url),
-    status: response.status,
-    statusText: response.statusText,
-    contentType: response.headers.get('content-type') || '',
-    requestId: response.headers.get('x-request-id') || response.headers.get('request-id') || '',
-    cfRay: response.headers.get('cf-ray') || '',
-    ...context,
-    body: loggedBody || '<empty>',
+function getVideoUpstreamLogOptions() {
+  const env = getRuntimeEnv();
+  return {
+    enabled: isVideoUpstreamLogEnabled(env.FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED),
+    maxChars: getVideoUpstreamLogMaxChars(
+      env.FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS,
+      env.FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS,
+    ),
+    logDir: env.FLYREQ_VIDEO_UPSTREAM_LOG_DIR,
   };
-  console.error('[video-upstream] 上游响应异常\n' + JSON.stringify(diagnostics, null, 2));
 }
 
 function validateEnumValue(value, validValues, fieldName) {
@@ -2383,12 +2376,19 @@ async function createUpstreamVideo(apiKey, request, files, signal) {
   const baseUrl = resolveAndLogOutboundBaseUrl('视频生成', 'openai', request.baseUrl).baseUrl;
   const upstreamRequest = createVideoRequest(request.protocol, apiKey, request, files);
   const url = appendProtocolApiPath('openai', baseUrl, upstreamRequest.path);
-  const response = await fetchWithTimeout(url, { ...upstreamRequest.init, signal });
+  const fetchInit = { ...upstreamRequest.init, signal };
+  const logOptions = getVideoUpstreamLogOptions();
+  const context = { protocol: request.protocol, model: request.model };
+  logVideoUpstreamRequest('create', url, fetchInit, context, logOptions);
+  const response = await fetchWithTimeout(url, fetchInit);
   const responseText = await response.text();
   const data = parseJsonSafely(responseText);
   const upstreamTaskId = getCreatedVideoTaskId(request.protocol, data);
+  logVideoUpstreamResponse('create', url, response, responseText, context, {
+    ...logOptions,
+    isError: !response.ok || !upstreamTaskId,
+  });
   if (!response.ok || !upstreamTaskId) {
-    logVideoUpstreamFailure('create', url, response, responseText, { model: request.model });
     throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '未返回任务 ID')}`);
   }
   return upstreamTaskId;
@@ -2409,19 +2409,25 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
   const baseUrl = resolveAndLogOutboundBaseUrl('视频任务轮询', 'openai', request.baseUrl).baseUrl;
   const url = appendProtocolApiPath('openai', baseUrl, getVideoPollPath(request.protocol, upstreamTaskId));
   const deadline = Date.now() + timeoutMs;
+  const logOptions = getVideoUpstreamLogOptions();
+  const context = { protocol: request.protocol, model: request.model, upstreamTaskId };
   while (Date.now() < deadline) {
     signal.throwIfAborted();
-    const response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal });
+    const fetchInit = { headers: { Authorization: `Bearer ${apiKey}` }, signal };
+    logVideoUpstreamRequest('poll', url, fetchInit, context, logOptions);
+    const response = await fetchWithTimeout(url, fetchInit);
     const responseText = await response.text();
     const data = parseJsonSafely(responseText);
+    const result = data ? normalizeVideoPollResult(request.protocol, data, baseUrl, upstreamTaskId) : null;
+    logVideoUpstreamResponse('poll', url, response, responseText, context, {
+      ...logOptions,
+      isError: !response.ok || !data || result?.state === 'failed',
+    });
     if (!response.ok || !data) {
-      logVideoUpstreamFailure('poll', url, response, responseText, { upstreamTaskId });
       throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '轮询响应格式无效')}`);
     }
-    const result = normalizeVideoPollResult(request.protocol, data, baseUrl, upstreamTaskId);
     if (result.state === 'completed') return { remoteUrl: result.remoteUrl, authenticatedOrigin: new URL(baseUrl).origin };
     if (result.state === 'failed') {
-      logVideoUpstreamFailure('poll-failed', url, response, responseText, { upstreamTaskId });
       throw new Error(`上游视频任务失败：${getVideoUpstreamErrorDetail(data, responseText, '上游未返回失败原因')}`);
     }
     await waitForVideoPoll(intervalMs, signal);
@@ -2441,12 +2447,17 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
 async function cacheVideoResult(taskId, remoteUrl, apiKey, authenticatedOrigin, signal) {
   const resultUrl = new URL(remoteUrl);
   const headers = getVideoDownloadHeaders(resultUrl.toString(), authenticatedOrigin, apiKey);
-  const response = await fetchWithTimeout(resultUrl.toString(), { headers, signal });
+  const fetchInit = { headers, signal };
+  const logOptions = getVideoUpstreamLogOptions();
+  const context = { taskId };
+  logVideoUpstreamRequest('download', resultUrl, fetchInit, context, logOptions);
+  const response = await fetchWithTimeout(resultUrl.toString(), fetchInit);
   if (!response.ok || !response.body) {
     const responseText = await response.text().catch(() => '');
-    logVideoUpstreamFailure('download', remoteUrl, response, responseText, { taskId });
+    logVideoUpstreamResponse('download', resultUrl, response, responseText, context, { ...logOptions, isError: true });
     throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(parseJsonSafely(responseText), responseText, '视频下载失败')}`);
   }
+  logVideoUpstreamResponse('download', resultUrl, response, undefined, context, logOptions);
   const ext = getVideoExtension(response.headers.get('content-type'));
   const filePath = path.join(VIDEO_DIR, `${taskId}.${ext}`);
   try {

@@ -238,7 +238,7 @@ https://image.flyreq.com/zh/?provider={"type":"video","protocol":"openai","model
 
 配置完整时，视频模型会成为视频生成默认模型。视频外链接受 `new-api`、`openai` 与 `xai` 三种协议。新链接必须使用显式 `protocol` 字段；历史 `provider=openai` 格式继续映射到旧版视频端点。
 
-视频上游创建、轮询或结果下载失败时，服务端会输出 `[video-upstream]` 结构化日志，包含请求阶段、脱敏 URL、HTTP 状态、请求追踪 ID 和上游原始响应体，不包含 API Key。单条响应默认最多记录 65536 字符，可通过 `FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS` 调整。
+视频上游每次创建、轮询和结果下载的请求与响应都会输出 `[video-upstream]` 结构化日志，并按本地日期写入 `backend/logs/video-upstream/video-upstream-YYYY-MM-DD.log` JSONL 文件。日志包含请求阶段、方法、URL、HTTP 状态、请求头、请求参数、响应头、响应正文和任务上下文。API Key、认证头、Cookie、签名查询参数会自动脱敏；data URL 与 multipart 媒体只记录类型、名称和字节数，成功下载的视频流不会被读取或写入日志。日志默认开启，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED=false` 关闭；单条响应正文默认最多记录 65536 字符，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` 调整，落盘目录可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` 修改。Docker Compose 默认将宿主机 `./logs` 挂载到 `/app/backend/logs`，并使用 `Asia/Shanghai` 时区分割日期。
 
 #### 字段与行为
 
@@ -644,6 +644,9 @@ docker push ghcr.io/doudou770/flyreq-image-studio:latest
 | `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` | 否 | `https://flyreq.com` | 首次默认视频模型的 Base URL |
 | `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID` | 否 | `sora-2` | 首次默认视频模型的上游模型 ID |
 | `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` | 否 | 空 | 视频协议能力的 JSON Merge Patch 覆盖；对象递归合并，数组整体替换，`null` 删除字段 |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED` | 否 | `true` | 是否记录视频上游创建、轮询和下载阶段的每次请求与响应；`false`、`0`、`no`、`off` 关闭 |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` | 否 | `65536` | 单条视频上游响应正文的最大日志字符数，范围 `1024-1048576` |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` | 否 | `backend/logs/video-upstream` | 按日期分割的视频上游 JSONL 日志目录；Docker Compose 使用 `/app/backend/logs/video-upstream` |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_BASE_URL` | 否 | `https://flyreq.com` | 首次默认图片模型的 Base URL |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_MODEL_ID` | 否 | 空 | 实际模型 ID；留空时使用预设模型 ID 映射 |
 | `FLYREQ_DEFAULT_IMAGE_MODEL_PRESET` | 否 | `gpt-image-2` | 内置图片预设 ID，决定模型能力边界 |

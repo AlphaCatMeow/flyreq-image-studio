@@ -227,7 +227,7 @@ https://image.flyreq.com/en/?provider={"type":"video","protocol":"openai","model
 
 When complete, the imported video model becomes the video-generation default. Video links accept the `new-api`, `openai`, and `xai` protocols. Use the explicit `protocol` field for new links; the historical `provider=openai` form remains mapped to the legacy video endpoint.
 
-When video creation, polling, or result download fails, the server writes a structured `[video-upstream]` log containing the request stage, sanitized URL, HTTP status, request-trace ID, and raw upstream response body without the API Key. Each body is limited to 65,536 characters by default and can be adjusted with `FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS`.
+Every video-upstream request and response for creation, polling, and result download is written as a structured `[video-upstream]` log and appended to a daily JSONL file at `backend/logs/video-upstream/video-upstream-YYYY-MM-DD.log` using the process-local date. The log includes the stage, method, URL, HTTP status, headers, request parameters, response body, and task context. API keys, authorization headers, cookies, and signed-URL query parameters are sanitized; data URLs and multipart media are reduced to type, name, and byte-count metadata, while successful download streams are never consumed or logged. Logging is enabled by default and can be disabled with `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED=false`. Response bodies are limited to 65,536 characters by default and can be adjusted with `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS`; the directory can be changed with `FLYREQ_VIDEO_UPSTREAM_LOG_DIR`. Docker Compose persists `/app/backend/logs` under host `./logs` and defaults daily rotation to the `Asia/Shanghai` timezone.
 
 ### Fields and behavior
 
@@ -531,6 +531,9 @@ The built-in `GITHUB_TOKEN` requires Actions permission to write `contents` and 
 | `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` | No | `https://flyreq.com` | Base URL of the first default video model. |
 | `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID` | No | `sora-2` | Upstream model ID of the first default video model. |
 | `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` | No | Empty | JSON Merge Patch for video protocol capabilities; objects merge recursively, arrays replace, and `null` deletes a field. |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED` | No | `true` | Logs every video-upstream request and response during creation, polling, and download. Set `false`, `0`, `no`, or `off` to disable it. |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` | No | `65536` | Maximum logged characters for one video-upstream response body, constrained to `1024-1048576`. |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` | No | `backend/logs/video-upstream` | Directory for date-split video-upstream JSONL logs; Docker Compose uses `/app/backend/logs/video-upstream`. |
 | `PROMPT_GALLERY_MODE` | No | `2` | `1` always visible / `2` password-protected / `3` hidden. |
 | `PROMPT_GALLERY_PASSWORD` | No | Empty | Prompt Gallery password in private mode. Private mode opens directly when empty. |
 
