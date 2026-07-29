@@ -35,6 +35,7 @@ import {
   type ReversePromptModelId,
 } from '@/lib/reverse-prompt-config';
 import { getConfiguredTextModel } from '@/lib/model-endpoints';
+import { updateRegistryDefaults } from '@/lib/flyreq-models';
 import {
   clearReverseDraft,
   loadReverseResults,
@@ -476,6 +477,7 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
                       key={option.value}
                       onClick={() => {
                         setModel(option.value);
+                        updateRegistryDefaults({ reversePrompt: option.value });
                         setTimeout(() => setModelPopoverOpen(false), 0);
                       }}
                       className={cn(

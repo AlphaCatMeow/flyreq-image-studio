@@ -1,23 +1,24 @@
 const { isVideoProtocol } = require('./video-protocol-config');
 
 /**
- * 将图片附件转换为可放入 JSON 请求的数据地址。
- * @param {{ mimeType: string, buffer: Buffer } | undefined} file 首张参考图片。
- * @returns {string | undefined} Base64 数据地址；没有图片时返回 undefined。
+ * 将媒体附件转换为可放入 JSON 请求的数据地址。
+ * @param {{ mimeType: string, buffer: Buffer } | undefined} file 参考媒体文件。
+ * @returns {string | undefined} Base64 数据地址；没有附件时返回 undefined。
  */
-function toImageDataUrl(file) {
+function toMediaDataUrl(file) {
   if (!file) return undefined;
   return `data:${file.mimeType};base64,${file.buffer.toString('base64')}`;
 }
 
 /**
- * 从工作台尺寸中解析宽高。
- * @param {string} size 宽x高或 auto。
- * @returns {{ width?: number, height?: number }} 可发送给上游的宽高字段。
+ * 向 multipart 请求追加同类型参考附件。
+ * @param {FormData} body 待写入的上游表单。
+ * @param {string} fieldName 上游附件字段名。
+ * @param {Array<{ filename: string, mimeType: string, buffer: Buffer }>} files 同类型附件集合。
+ * @returns {void} 直接修改传入的表单。
  */
-function parseVideoSize(size) {
-  const match = String(size || '').match(/^(\d+)x(\d+)$/);
-  return match ? { width: Number(match[1]), height: Number(match[2]) } : {};
+function appendMediaFiles(body, fieldName, files) {
+  for (const file of files) body.append(fieldName, new Blob([file.buffer], { type: file.mimeType }), file.filename);
 }
 
 /**
@@ -50,19 +51,26 @@ function getVideoDownloadHeaders(remoteUrl, authenticatedOrigin, apiKey) {
  * @param {'new-api' | 'openai' | 'xai' | 'legacy-openai-video'} protocol 视频协议。
  * @param {string} apiKey 上游 API Key。
  * @param {{ model: string, prompt: string, resolution: number, size: string, aspectRatio: string, seconds: number }} request 工作台生成参数。
- * @param {{ images: Array<{ filename: string, mimeType: string, buffer: Buffer }> }} files 参考附件集合。
+ * @param {{ images: Array<{ filename: string, mimeType: string, buffer: Buffer }>, videos: Array<{ filename: string, mimeType: string, buffer: Buffer }>, audios: Array<{ filename: string, mimeType: string, buffer: Buffer }> }} files 参考附件集合。
  * @returns {{ path: string, init: { method: string, headers: Record<string, string>, body: string | FormData } }} 上游路径和 fetch 参数。
  */
 function createVideoRequest(protocol, apiKey, request, files) {
   const authorization = { Authorization: `Bearer ${apiKey}` };
-  const image = files.images[0];
+  const images = files.images || [];
+  const videos = files.videos || [];
+  const audios = files.audios || [];
+  const image = images[0];
   if (protocol === 'openai') {
     const body = new FormData();
     body.append('model', request.model);
     body.append('prompt', request.prompt);
     body.append('seconds', String(request.seconds));
     if (request.size !== 'auto') body.append('size', request.size);
+    body.append('resolution', `${request.resolution}p`);
     if (image) body.append('input_reference', new Blob([image.buffer], { type: image.mimeType }), image.filename);
+    appendMediaFiles(body, 'reference_images', images);
+    appendMediaFiles(body, 'reference_videos', videos);
+    appendMediaFiles(body, 'reference_audios', audios);
     return { path: '/v1/videos', init: { method: 'POST', headers: authorization, body } };
   }
 
@@ -77,16 +85,27 @@ function createVideoRequest(protocol, apiKey, request, files) {
     return { path: '/v1/videos/generations', init: { method: 'POST', headers: { ...authorization, 'Content-Type': 'application/json' }, body: JSON.stringify(common) } };
   }
 
-  const dimensions = parseVideoSize(request.size);
   if (protocol === 'new-api') {
+    const imageDataUrls = images.map(toMediaDataUrl);
+    const referenceVideos = videos.map(toMediaDataUrl);
+    const referenceAudios = audios.map(toMediaDataUrl);
+    const metadata = {
+      resolution: `${request.resolution}p`,
+    };
+    if (referenceVideos.length > 0) metadata.reference_videos = referenceVideos;
+    if (referenceAudios.length > 0) metadata.reference_audios = referenceAudios;
     const payload = {
       model: request.model,
       prompt: request.prompt,
       duration: request.seconds,
-      ...dimensions,
+      seconds: String(request.seconds),
+      metadata,
     };
-    const imageDataUrl = toImageDataUrl(image);
-    if (imageDataUrl) payload.image = imageDataUrl;
+    if (request.size !== 'auto') payload.size = request.size;
+    if (imageDataUrls.length > 0) {
+      payload.image = imageDataUrls[0];
+      payload.images = imageDataUrls;
+    }
     return {
       path: '/v1/video/generations',
       init: { method: 'POST', headers: { ...authorization, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) },
@@ -94,7 +113,7 @@ function createVideoRequest(protocol, apiKey, request, files) {
   }
 
   const payload = { model: request.model, prompt: request.prompt, duration: request.seconds, resolution: `${request.resolution}p`, aspect_ratio: request.aspectRatio };
-  const imageDataUrl = toImageDataUrl(image);
+  const imageDataUrl = toMediaDataUrl(image);
   if (imageDataUrl) payload.image = imageDataUrl;
   return {
     path: '/v1/videos/generations',

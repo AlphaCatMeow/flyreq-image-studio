@@ -21,6 +21,7 @@ import { loadJsonFromStorage, saveJsonToStorage } from '@/lib/settings-storage';
 import { requireDefaultConfiguredTextModel } from '@/lib/model-endpoints';
 import { addTextAsset, getAssetBlob, type ImageAsset, type TextAsset } from '@/lib/asset-store';
 import { getDefaultModelId, MODEL_IMAGE_LIMITS, MODEL_OPTIONS, type ModelId } from '@/lib/gemini-config';
+import { updateRegistryDefaults } from '@/lib/flyreq-models';
 import {
   DEFAULT_GPT_IMAGE_ADVANCED_PARAMS,
   getAspectRatioOptions,
@@ -174,7 +175,10 @@ export function ImageGenerationWorkbench({
    * @returns 无返回值，相关表单状态会同步更新。
    */
   const handleParamsChange = useCallback((patch: Partial<GenerationParamsValue>) => {
-    if (patch.model !== undefined) setModel(patch.model);
+    if (patch.model !== undefined) {
+      setModel(patch.model);
+      updateRegistryDefaults({ [currentMode === 'image-to-image' ? 'imageToImage' : 'textToImage']: patch.model });
+    }
     if (patch.outputSize !== undefined) setOutputSize(patch.outputSize);
     if ('customSize' in patch) setCustomSize(patch.customSize);
     if (patch.aspectRatio !== undefined) setAspectRatio(patch.aspectRatio);
@@ -548,7 +552,7 @@ export function ImageGenerationWorkbench({
       next[index] = value;
       return next;
     });
-  }, []);
+  }, [currentMode]);
 
   const handleSubmit = () => {
     const mainPrompt = prompt.trim();

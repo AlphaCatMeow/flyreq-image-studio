@@ -64,9 +64,10 @@ describe('视频协议能力配置', () => {
       { protocols: { xai: { parameters: { size: { values: ['not-a-size'] } } } } },
       { protocols: { xai: { parameters: { aspectRatio: { values: ['not-a-ratio'] } } } } },
       { protocols: { xai: { parameters: { resolution: { values: [5000] } } } } },
-      { protocols: { xai: { references: { images: 2 } } } },
-      { protocols: { xai: { references: { videos: 1 } } } },
+      { protocols: { xai: { references: { images: 6 } } } },
+      { protocols: { xai: { references: { videos: 6 } } } },
       { protocols: { xai: { references: { imageMimeTypes: ['text/plain'] } } } },
+      { protocols: { xai: { references: { videoMimeTypes: ['text/plain'] } } } },
     ];
 
     for (const override of invalidOverrides) {
@@ -80,9 +81,17 @@ describe('视频协议能力配置', () => {
     const config = resolveVideoProtocolConfig({});
     const standard = resolveVideoProtocolProfile(config, 'openai', 'sora-2');
     const pro = resolveVideoProtocolProfile(config, 'openai', 'sora-2-pro');
-    expect(standard.parameters.size.values).toEqual(['1280x720', '720x1280']);
+    expect(standard.parameters.size.values).toContain('1920x1080');
+    expect(standard.parameters.size.allowCustom).toBe(true);
     expect(pro.parameters.size.values).toContain('1920x1080');
-    expect(pro.parameters.duration.values).toEqual([4, 8, 12, 16, 20]);
+    expect(pro.parameters.duration).toEqual(expect.objectContaining({ mode: 'range', min: 1, max: 60 }));
+  });
+
+  it('下发的创建接口路径与各协议实际请求保持一致', () => {
+    const config = resolveVideoProtocolConfig({});
+    expect(config.protocols['new-api'].createEndpoint).toEqual({ method: 'POST', path: '/v1/video/generations' });
+    expect(config.protocols.openai.createEndpoint).toEqual({ method: 'POST', path: '/v1/videos' });
+    expect(config.protocols.xai.createEndpoint).toEqual({ method: 'POST', path: '/v1/videos/generations' });
   });
 
   it('仅允许 xAI 1.5 图生视频使用 1080p', () => {
@@ -98,7 +107,7 @@ describe('视频协议能力配置', () => {
   it('使用同一能力配置拒绝非法时长、宽高比和附件', () => {
     const config = resolveVideoProtocolConfig({});
     expect(() => validateVideoProtocolRequest(config, 'openai', 'sora-2', {
-      seconds: 6,
+      seconds: 61,
       size: '1280x720',
       aspectRatio: '',
       resolution: 720,

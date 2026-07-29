@@ -19,6 +19,8 @@ export interface CreateVideoTaskInput {
   aspectRatio: string;
   seconds: number;
   referenceImages: File[];
+  referenceVideos: File[];
+  referenceAudios: File[];
 }
 
 /**
@@ -48,6 +50,8 @@ export async function createVideoTask(input: CreateVideoTaskInput): Promise<stri
   formData.set('aspectRatio', input.aspectRatio);
   formData.set('seconds', String(input.seconds));
   input.referenceImages.forEach(file => formData.append('reference_images', file, file.name));
+  input.referenceVideos.forEach(file => formData.append('reference_videos', file, file.name));
+  input.referenceAudios.forEach(file => formData.append('reference_audios', file, file.name));
   const response = await fetch('/api/flyreq/video-tasks', { method: 'POST', body: formData });
   if (!response.ok) return throwVideoTaskError(response);
   const data = await response.json() as { taskId?: string };

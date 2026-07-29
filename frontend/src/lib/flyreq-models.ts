@@ -499,6 +499,23 @@ export function saveRegistry(registry: FlyreqModelRegistry): void {
   storage.setItem(REGISTRY_KEY, JSON.stringify(normalized));
 }
 
+/**
+ * 更新工作流默认模型并通知当前页面中的模型消费者刷新。
+ * @param patch 需要变更的默认模型字段；未提供的工作流保持原值。
+ * @returns 注册表实际保存后的默认模型配置。
+ */
+export function updateRegistryDefaults(patch: Partial<DefaultModels>): DefaultModels {
+  const registry = loadRegistry();
+  saveRegistry({ ...registry, defaults: { ...registry.defaults, ...patch } });
+  const persistedDefaults = loadRegistry().defaults;
+  const changed = Object.keys(patch).some(key => {
+    const task = key as keyof DefaultModels;
+    return registry.defaults[task] !== persistedDefaults[task];
+  });
+  if (changed && typeof window !== 'undefined') window.dispatchEvent(new Event('flyreq-model-registry-updated'));
+  return persistedDefaults;
+}
+
 export function getImageModelById(registry: FlyreqModelRegistry, id: string): ImageModelConfig | undefined {
   return registry.imageModels.find((model) => model.id === id);
 }

@@ -23,6 +23,8 @@ const request = {
 };
 const files = {
   images: [{ filename: 'reference.png', mimeType: 'image/png', buffer: Buffer.from('image') }],
+  videos: [{ filename: 'reference.mp4', mimeType: 'video/mp4', buffer: Buffer.from('video') }],
+  audios: [{ filename: 'reference.mp3', mimeType: 'audio/mpeg', buffer: Buffer.from('audio') }],
 };
 
 describe('视频协议适配器', () => {
@@ -34,9 +36,15 @@ describe('视频协议适配器', () => {
       model: 'video-model',
       prompt: 'A camera move',
       duration: 8,
-      width: 1280,
-      height: 720,
+      seconds: '8',
+      size: '1280x720',
       image: expect.stringMatching(/^data:image\/png;base64,/),
+      images: [expect.stringMatching(/^data:image\/png;base64,/)],
+      metadata: expect.objectContaining({
+        resolution: '720p',
+        reference_videos: [expect.stringMatching(/^data:video\/mp4;base64,/)],
+        reference_audios: [expect.stringMatching(/^data:audio\/mpeg;base64,/)],
+      }),
     }));
     expect(getCreatedVideoTaskId('new-api', { task_id: 'task-new' })).toBe('task-new');
     expect(getVideoPollPath('new-api', 'task/new')).toBe('/v1/video/generations/task%2Fnew');
@@ -49,6 +57,10 @@ describe('视频协议适配器', () => {
     expect(upstream.init.body).toBeInstanceOf(FormData);
     expect(upstream.init.body.get('model')).toBe('video-model');
     expect(upstream.init.body.get('input_reference')).toBeInstanceOf(Blob);
+    expect(upstream.init.body.get('resolution')).toBe('720p');
+    expect(upstream.init.body.getAll('reference_images')).toHaveLength(1);
+    expect(upstream.init.body.getAll('reference_videos')).toHaveLength(1);
+    expect(upstream.init.body.getAll('reference_audios')).toHaveLength(1);
     expect(getCreatedVideoTaskId('openai', { id: 'video-openai' })).toBe('video-openai');
     expect(normalizeVideoPollResult('openai', { status: 'completed' }, 'https://api.openai.com', 'video-openai')).toEqual({
       state: 'completed',

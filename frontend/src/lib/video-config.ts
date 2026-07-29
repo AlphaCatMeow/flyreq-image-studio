@@ -16,13 +16,14 @@ export interface VideoProtocolProfile {
   hidden: boolean;
   constraintSource: 'official' | 'workspace-default' | 'legacy';
   settings: { baseUrl: string; presetModelId: string };
+  createEndpoint?: { method: 'POST'; path: string };
   parameters: {
     duration: VideoDurationCapability;
     size: { visible: boolean; mode: 'enum' | 'dimensions'; values: string[]; allowCustom: boolean };
     aspectRatio: { visible: boolean; values: string[] };
     resolution: { visible: boolean; values: number[]; allowCustom: boolean };
   };
-  references: { images: number; videos: number; audios: number; imageMimeTypes: string[]; imageSizeMustMatchOutput: boolean };
+  references: { images: number; videos: number; audios: number; imageMimeTypes: string[]; videoMimeTypes: string[]; audioMimeTypes: string[]; imageSizeMustMatchOutput: boolean };
   modelProfiles: Array<{ modelPrefix: string; requiresImage: boolean; patch: Partial<VideoProtocolProfile> }>;
 }
 
@@ -57,6 +58,30 @@ export const DEFAULT_VIDEO_WORKSPACE_CONFIG: VideoWorkspaceConfig = {
 
 let runtimeConfig: VideoWorkspaceConfig = { ...DEFAULT_VIDEO_WORKSPACE_CONFIG };
 let runtimeProtocolConfig = structuredClone(defaultVideoProtocolConfig) as unknown as VideoProtocolConfig;
+
+/**
+ * 将旧版服务端下发的协议能力补齐为当前前端所需结构。
+ * @param defaults 当前版本内置的完整协议能力。
+ * @param incoming 服务端下发的同协议能力，允许缺少新增字段。
+ * @returns 保留服务端覆盖值并补齐缺失节点的协议能力。
+ */
+function mergeVideoProtocolProfile(defaults: VideoProtocolProfile, incoming?: Partial<VideoProtocolProfile>): VideoProtocolProfile {
+  if (!incoming) return structuredClone(defaults);
+  return {
+    ...structuredClone(defaults),
+    ...structuredClone(incoming),
+    settings: { ...defaults.settings, ...incoming.settings },
+    createEndpoint: { ...defaults.createEndpoint, ...incoming.createEndpoint } as VideoProtocolProfile['createEndpoint'],
+    parameters: {
+      duration: { ...defaults.parameters.duration, ...incoming.parameters?.duration },
+      size: { ...defaults.parameters.size, ...incoming.parameters?.size },
+      aspectRatio: { ...defaults.parameters.aspectRatio, ...incoming.parameters?.aspectRatio },
+      resolution: { ...defaults.parameters.resolution, ...incoming.parameters?.resolution },
+    },
+    references: { ...defaults.references, ...incoming.references },
+    modelProfiles: Array.isArray(incoming.modelProfiles) ? structuredClone(incoming.modelProfiles) as VideoProtocolProfile['modelProfiles'] : structuredClone(defaults.modelProfiles),
+  };
+}
 
 /**
  * 从未知数组中保留正整数。
@@ -111,7 +136,18 @@ export function getVideoWorkspaceConfig(): VideoWorkspaceConfig {
  * @returns 无返回值，缺失配置时恢复仓库内置官方能力。
  */
 export function applyVideoProtocolConfig(config?: VideoProtocolConfig): void {
-  runtimeProtocolConfig = structuredClone(config || defaultVideoProtocolConfig) as unknown as VideoProtocolConfig;
+  const defaults = structuredClone(defaultVideoProtocolConfig) as unknown as VideoProtocolConfig;
+  if (!config) {
+    runtimeProtocolConfig = defaults;
+    return;
+  }
+  runtimeProtocolConfig = {
+    version: config.version || defaults.version,
+    protocols: Object.fromEntries(Object.entries(defaults.protocols).map(([protocol, profile]) => [
+      protocol,
+      mergeVideoProtocolProfile(profile, config.protocols?.[protocol as VideoProtocol]),
+    ])) as Record<VideoProtocol, VideoProtocolProfile>,
+  };
 }
 
 /**
@@ -154,14 +190,14 @@ export function isValidVideoResolution(value: number): boolean {
 /**
  * 校验自定义视频尺寸。
  * @param value 用户输入的宽高字符串。
- * @returns 宽高均处于 64 至 4096 且为 8 的倍数时返回 true。
+ * @returns 宽高均为 64 至 4096 范围内的整数时返回 true。
  */
 export function isValidVideoSize(value: string): boolean {
   const match = value.trim().match(/^(\d+)x(\d+)$/i);
   if (!match) return false;
   const width = Number(match[1]);
   const height = Number(match[2]);
-  return [width, height].every(side => side >= 64 && side <= 4096 && side % 8 === 0);
+  return [width, height].every(side => Number.isInteger(side) && side >= 64 && side <= 4096);
 }
 
 /**

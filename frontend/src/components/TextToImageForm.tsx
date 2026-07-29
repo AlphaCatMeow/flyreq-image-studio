@@ -23,6 +23,7 @@ import { streamPromptOptimize, type StreamPromptOptimizeHandle } from '@/lib/pro
 import { loadJsonFromStorage, saveJsonToStorage } from '@/lib/settings-storage';
 import { requireDefaultConfiguredTextModel } from '@/lib/model-endpoints';
 import { getDefaultModelId, type ModelId } from '@/lib/gemini-config';
+import { updateRegistryDefaults } from '@/lib/flyreq-models';
 import {
   getAspectRatioOptions,
   getCustomSizeMaxSide,
@@ -161,7 +162,10 @@ export function TextToImageForm({ onSubmit, disabled = false, onDraftConsumed, o
 
   // 参数条（GenerationParamsBar）回传 patch，合并到本地状态（级联逻辑在参数条内部完成）。
   const handleParamsChange = useCallback((patch: Partial<GenerationParamsValue>) => {
-    if (patch.model !== undefined) setModel(patch.model);
+    if (patch.model !== undefined) {
+      setModel(patch.model);
+      updateRegistryDefaults({ textToImage: patch.model });
+    }
     if (patch.outputSize !== undefined) setOutputSize(patch.outputSize);
     if ('customSize' in patch) setCustomSize(patch.customSize);
     if (patch.aspectRatio !== undefined) setAspectRatio(patch.aspectRatio);

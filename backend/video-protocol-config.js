@@ -44,7 +44,7 @@ function isValidConfiguredVideoSize(value) {
   if (typeof value !== 'string') return false;
   const match = value.match(/^(\d+)x(\d+)$/);
   if (!match) return false;
-  return [Number(match[1]), Number(match[2])].every(side => side >= 64 && side <= 4096 && side % 8 === 0);
+  return [Number(match[1]), Number(match[2])].every(side => Number.isInteger(side) && side >= 64 && side <= 4096);
 }
 
 /**
@@ -57,12 +57,13 @@ function isValidConfiguredAspectRatio(value) {
 }
 
 /**
- * 判断能力配置中的参考图 MIME 规则是否合法。
+ * 判断能力配置中的参考媒体 MIME 规则是否合法。
  * @param {unknown} value 待校验的 MIME 规则。
- * @returns {boolean} 值为 image/* 或合法的 image 子类型时返回 true。
+ * @param {'image' | 'video' | 'audio'} mediaType 规则必须匹配的媒体主类型。
+ * @returns {boolean} 值为对应类型通配符或合法子类型时返回 true。
  */
-function isValidConfiguredImageMimeType(value) {
-  return typeof value === 'string' && /^image\/(?:\*|[a-z0-9][a-z0-9!#$&^_.+-]*)$/.test(value);
+function isValidConfiguredMediaMimeType(value, mediaType) {
+  return typeof value === 'string' && new RegExp(`^${mediaType}\\/(?:\\*|[a-z0-9][a-z0-9!#$&^_.+-]*)$`).test(value);
 }
 
 /**
@@ -90,9 +91,10 @@ function validateProtocolProfile(protocol, profile) {
   const references = profile.references;
   if (!['official', 'workspace-default', 'legacy'].includes(profile.constraintSource)) throw new Error(`视频协议约束来源无效: ${protocol}`);
   if (!profile.settings || !String(profile.settings.baseUrl || '').trim() || typeof profile.settings.presetModelId !== 'string') throw new Error(`视频协议设置模板无效: ${protocol}`);
+  if (profile.createEndpoint?.method !== 'POST' || !/^\/v1\/[a-z0-9/-]+$/.test(String(profile.createEndpoint?.path || ''))) throw new Error(`视频协议创建接口无效: ${protocol}`);
   if (!parameters?.duration || !parameters?.size || !parameters?.aspectRatio || !parameters?.resolution) throw new Error(`视频协议参数不完整: ${protocol}`);
-  if (!references || !Number.isInteger(references.images) || references.images < 0 || references.images > 1 || references.videos !== 0 || references.audios !== 0) throw new Error(`视频协议附件限制无效: ${protocol}`);
-  if (!Array.isArray(references.imageMimeTypes) || references.imageMimeTypes.length === 0 || references.imageMimeTypes.some(value => !isValidConfiguredImageMimeType(value)) || typeof references.imageSizeMustMatchOutput !== 'boolean') throw new Error(`视频协议参考图配置无效: ${protocol}`);
+  if (!references || !Number.isInteger(references.images) || references.images < 0 || references.images > 5 || !Number.isInteger(references.videos) || references.videos < 0 || references.videos > 5 || !Number.isInteger(references.audios) || references.audios < 0 || references.audios > 5) throw new Error(`视频协议附件限制无效: ${protocol}`);
+  if (!Array.isArray(references.imageMimeTypes) || references.imageMimeTypes.length === 0 || references.imageMimeTypes.some(value => !isValidConfiguredMediaMimeType(value, 'image')) || !Array.isArray(references.videoMimeTypes) || references.videoMimeTypes.length === 0 || references.videoMimeTypes.some(value => !isValidConfiguredMediaMimeType(value, 'video')) || !Array.isArray(references.audioMimeTypes) || references.audioMimeTypes.length === 0 || references.audioMimeTypes.some(value => !isValidConfiguredMediaMimeType(value, 'audio')) || typeof references.imageSizeMustMatchOutput !== 'boolean') throw new Error(`视频协议参考附件配置无效: ${protocol}`);
   const duration = parameters.duration;
   if (!['enum', 'range'].includes(duration.mode) || !Array.isArray(duration.presets) || duration.presets.length === 0) throw new Error(`视频协议时长配置无效: ${protocol}`);
   if (duration.mode === 'enum' && (!Array.isArray(duration.values) || duration.values.length === 0 || duration.values.some(value => !Number.isInteger(value) || value <= 0 || value > MAX_VIDEO_DURATION_SECONDS))) throw new Error(`视频协议时长枚举无效: ${protocol}`);
@@ -218,26 +220,28 @@ function validateVideoProtocolRequest(config, protocol, modelId, request, files)
 }
 
 /**
- * 判断附件 MIME 类型是否符合协议配置，支持 image/* 形式的通配规则。
+ * 判断附件 MIME 类型是否符合协议配置，支持 image/*、video/*、audio/* 形式的通配规则。
  * @param {string} mimeType 附件声明的 MIME 类型。
  * @param {string[]} allowedTypes 协议允许的 MIME 类型列表。
  * @returns {boolean} MIME 类型命中精确值或类型通配规则时返回 true。
  */
-function isAllowedImageMimeType(mimeType, allowedTypes) {
+function isAllowedMediaMimeType(mimeType, allowedTypes) {
   return allowedTypes.some(allowed => allowed === mimeType || (allowed.endsWith('/*') && mimeType.startsWith(allowed.slice(0, -1))));
 }
 
 /**
- * 按协议能力配置校验参考图格式和像素尺寸。
+ * 按协议能力配置校验三类参考附件格式，并按需校验参考图像素尺寸。
  * @param {any} profile 本次请求已解析的协议能力。
  * @param {{ size: string }} request 视频生成参数。
- * @param {{ images: Array<{ mimeType: string, buffer: Buffer }> }} files 已解析的参考附件。
+ * @param {{ images: Array<{ mimeType: string, buffer: Buffer }>, videos: Array<{ mimeType: string, buffer: Buffer }>, audios: Array<{ mimeType: string, buffer: Buffer }> }} files 已解析的参考附件。
  * @returns {Promise<void>} 校验通过时完成；格式、图片内容或尺寸不符时抛出错误。
  */
 async function validateVideoProtocolReferences(profile, request, files) {
+  if (files.images.some(file => !isAllowedMediaMimeType(file.mimeType, profile.references.imageMimeTypes))) throw new Error('参考图格式不符合当前协议限制');
+  if (files.videos.some(file => !isAllowedMediaMimeType(file.mimeType, profile.references.videoMimeTypes))) throw new Error('参考视频格式不符合当前协议限制');
+  if (files.audios.some(file => !isAllowedMediaMimeType(file.mimeType, profile.references.audioMimeTypes))) throw new Error('参考音频格式不符合当前协议限制');
   const image = files.images[0];
   if (!image) return;
-  if (!isAllowedImageMimeType(image.mimeType, profile.references.imageMimeTypes)) throw new Error('参考图格式不符合当前协议限制');
   if (!profile.references.imageSizeMustMatchOutput) return;
   const target = String(request.size || '').match(/^(\d+)x(\d+)$/);
   if (!target) throw new Error('当前协议要求明确的视频尺寸');
@@ -248,7 +252,7 @@ async function validateVideoProtocolReferences(profile, request, files) {
     throw new Error('参考图内容无效');
   }
   const detectedMimeType = metadata.format === 'jpeg' ? 'image/jpeg' : `image/${metadata.format || 'unknown'}`;
-  if (!isAllowedImageMimeType(detectedMimeType, profile.references.imageMimeTypes)) throw new Error('参考图实际格式不符合当前协议限制');
+  if (!isAllowedMediaMimeType(detectedMimeType, profile.references.imageMimeTypes)) throw new Error('参考图实际格式不符合当前协议限制');
   const expectedWidth = Number(target[1]);
   const expectedHeight = Number(target[2]);
   if (metadata.width !== expectedWidth || metadata.height !== expectedHeight) {

@@ -1,13 +1,14 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyDeploymentDefaultVideoModel,
   getCompleteVideoModels,
   getResolvedVideoModelId,
   loadRegistry,
   saveRegistry,
+  updateRegistryDefaults,
 } from '@/lib/flyreq-models';
 import {
   applyVideoWorkspaceConfig,
@@ -106,19 +107,49 @@ describe('视频模型注册表与工作台配置', () => {
     expect(reloaded.defaults.videoGeneration).toBe('');
   });
 
+  it('工作台选择模型后同步并广播对应的设置默认模型', () => {
+    const registry = loadRegistry();
+    registry.imageModels[0].apiKey = 'image-key';
+    registry.videoModels[0].apiKey = 'video-key';
+    registry.imageModels.push({ ...registry.imageModels[0], id: 'image-second', name: 'Image Second' });
+    registry.videoModels.push({ ...registry.videoModels[0], id: 'video-second', name: 'Video Second' });
+    registry.textModels = [
+      { id: 'text-first', protocol: 'openai', name: 'Text First', modelId: 'gpt-5.4-mini', apiKey: 'text-key', baseUrl: 'https://text.example.com' },
+      { id: 'text-second', protocol: 'openai', name: 'Text Second', modelId: 'gpt-5.4-mini', apiKey: 'text-key', baseUrl: 'https://text.example.com' },
+    ];
+    saveRegistry(registry);
+    const listener = vi.fn();
+    window.addEventListener('flyreq-model-registry-updated', listener);
+
+    const defaults = updateRegistryDefaults({
+      textToImage: 'image-second',
+      videoGeneration: 'video-second',
+      reversePrompt: 'text-second',
+    });
+
+    expect(defaults).toEqual(expect.objectContaining({
+      textToImage: 'image-second',
+      videoGeneration: 'video-second',
+      reversePrompt: 'text-second',
+    }));
+    expect(listener).toHaveBeenCalledOnce();
+    window.removeEventListener('flyreq-model-registry-updated', listener);
+  });
+
   it('规范化参数数组并执行精确的自定义值边界校验', () => {
     applyVideoWorkspaceConfig({ maxRefImages: 7, resolutions: [1080, 720], sizes: ['1920x1080', 'bad'], durations: [5, 8] });
     expect(getVideoWorkspaceConfig()).toEqual(expect.objectContaining({ maxRefImages: 7, resolutions: [1080, 720], sizes: ['1920x1080'], durations: [5, 8] }));
     expect(isValidVideoResolution(144)).toBe(true);
     expect(isValidVideoResolution(4321)).toBe(false);
     expect(isValidVideoSize('1280x720')).toBe(true);
-    expect(isValidVideoSize('1279x720')).toBe(false);
+    expect(isValidVideoSize('63x720')).toBe(false);
     expect(isValidVideoDuration(60)).toBe(true);
     expect(isValidVideoDuration(61)).toBe(false);
     const protocols = getVideoProtocolConfig().protocols;
     expect(getVideoProtocolDurations(protocols.openai)).toEqual([4, 8, 12, 16, 20]);
     expect(getVideoProtocolDurations(protocols.xai)).toEqual([5, 10, 15]);
-    expect(isValidVideoProtocolDuration(protocols.openai, 6)).toBe(false);
+    expect(isValidVideoProtocolDuration(protocols.openai, 6)).toBe(true);
+    expect(isValidVideoProtocolDuration(protocols.openai, 61)).toBe(false);
     expect(isValidVideoProtocolDuration(protocols.xai, 15)).toBe(true);
   });
 });

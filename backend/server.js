@@ -1482,7 +1482,7 @@ async function normalizeVideoTaskPayload(fields, files) {
     const match = size.match(/^(\d+)x(\d+)$/);
     const width = Number(match?.[1]);
     const height = Number(match?.[2]);
-    if (!match || [width, height].some(side => side < 64 || side > 4096 || side % 8 !== 0)) throw new Error('视频尺寸无效');
+    if (!match || [width, height].some(side => !Number.isInteger(side) || side < 64 || side > 4096)) throw new Error('视频尺寸无效');
   }
   if (files.videos.length > config.maxRefVideos || files.audios.length > config.maxRefAudios || files.images.length > config.maxRefImages) throw new Error('参考附件数量超过限制');
   const payload = {

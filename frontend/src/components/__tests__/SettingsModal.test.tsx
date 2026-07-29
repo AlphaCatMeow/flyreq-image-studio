@@ -1,8 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LanguageProvider } from '@/components/LanguageProvider';
-import { SettingsModal } from '@/components/SettingsModal';
+import { patchTextModelProtocol, patchVideoModelProtocol, SettingsModal } from '@/components/SettingsModal';
 import { getCompleteTextModels, loadRegistry, saveRegistry } from '@/lib/flyreq-models';
+import { applyVideoProtocolConfig, getVideoProtocolConfig } from '@/lib/video-config';
 
 /**
  * 使用英文环境渲染设置弹窗，便于验证新增多语言交互文案。
@@ -27,11 +28,79 @@ describe('SettingsModal unsaved configuration', () => {
     }));
   });
 
+  afterEach(() => {
+    applyVideoProtocolConfig();
+  });
+
   it('does not show the follow-along save bar before an actual edit', async () => {
     renderSettings();
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Save now' })).toBeDisabled());
     expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument();
+  });
+
+  it('selects the current default image, video, and text models when settings open', async () => {
+    localStorage.setItem('flyreq-model-registry', JSON.stringify({
+      schemaVersion: 2,
+      imageModels: [
+        { id: 'image-first', protocol: 'openai', name: 'Image First', modelId: 'image-1', apiKey: 'key', baseUrl: 'https://image-1.example.com', builtinPreset: 'gpt-image-2', maxRefImages: 1, maxOutputSize: '1K' },
+        { id: 'image-default', protocol: 'openai', name: 'Image Default', modelId: 'image-2', apiKey: 'key', baseUrl: 'https://image-2.example.com', builtinPreset: 'gpt-image-2', maxRefImages: 1, maxOutputSize: '1K' },
+      ],
+      videoModels: [
+        { id: 'video-first', protocol: 'openai', name: 'Video First', modelId: 'video-1', apiKey: 'key', baseUrl: 'https://video-1.example.com' },
+        { id: 'video-default', protocol: 'openai', name: 'Video Default', modelId: 'video-2', apiKey: 'key', baseUrl: 'https://video-2.example.com' },
+      ],
+      textModels: [
+        { id: 'text-first', protocol: 'openai', name: 'Text First', modelId: 'text-1', apiKey: 'key', baseUrl: 'https://text-1.example.com' },
+        { id: 'text-default', protocol: 'openai', name: 'Text Default', modelId: 'text-2', apiKey: 'key', baseUrl: 'https://text-2.example.com' },
+      ],
+      defaults: {
+        textToImage: 'image-default',
+        imageToImage: 'image-default',
+        videoGeneration: 'video-default',
+        reversePrompt: 'text-default',
+        agent: 'text-default',
+        promptOptimize: 'text-default',
+        imageDescribe: 'text-default',
+      },
+    }));
+
+    renderSettings();
+
+    expect(await screen.findByDisplayValue('Image Default')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Video Default')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Text Default')).toBeInTheDocument();
+    expect(screen.getAllByText('Current default')).toHaveLength(3);
+    await waitFor(() => expect(screen.queryByText('Unsaved changes')).not.toBeInTheDocument());
+  });
+
+  it('preserves user-entered model content when changing video or text protocol', () => {
+    const videoModel = {
+      id: 'video-custom',
+      protocol: 'openai' as const,
+      name: 'Custom Video',
+      modelId: 'custom-video-id',
+      apiKey: 'video-key',
+      baseUrl: 'https://custom-video.example.com',
+    };
+    expect(patchVideoModelProtocol(videoModel, 'new-api')).toEqual(expect.objectContaining({
+      protocol: 'new-api',
+      name: 'Custom Video',
+      modelId: 'custom-video-id',
+      apiKey: 'video-key',
+      baseUrl: 'https://custom-video.example.com',
+    }));
+
+    const textModel = {
+      id: 'text-custom',
+      protocol: 'openai' as const,
+      name: 'Custom Text',
+      modelId: 'custom-text-id',
+      apiKey: 'text-key',
+      baseUrl: 'https://custom-text.example.com',
+      note: 'Custom note',
+    };
+    expect(patchTextModelProtocol(textModel, 'google')).toEqual({ ...textModel, protocol: 'google' });
   });
 
   it('renders the complete settings navigation and model sections in English', async () => {
@@ -257,6 +326,32 @@ describe('SettingsModal unsaved configuration', () => {
     await waitFor(() => expect(loadRegistry().videoModels).toEqual(expect.arrayContaining([
       expect.objectContaining({ protocol: 'openai', presetModelId: 'sora-2', baseUrl: 'https://api.openai.com' }),
     ])));
+  });
+
+  it('shows the exact create endpoint and New API resolution behavior for the selected video protocol', async () => {
+    const registry = loadRegistry();
+    registry.videoModels[0] = {
+      ...registry.videoModels[0],
+      protocol: 'new-api',
+      presetModelId: '',
+      baseUrl: 'https://video.example.com',
+    };
+    saveRegistry(registry);
+    renderSettings();
+
+    expect(await screen.findByText('POST /v1/video/generations')).toBeInTheDocument();
+    expect(screen.getByText('New API sends clarity through metadata.resolution and output dimensions through size.')).toBeInTheDocument();
+  });
+
+  it('opens settings with a deterministic endpoint fallback for old runtime protocol config', async () => {
+    const oldConfig = structuredClone(getVideoProtocolConfig());
+    delete oldConfig.protocols.openai.createEndpoint;
+    applyVideoProtocolConfig(oldConfig);
+
+    renderSettings();
+
+    expect(await screen.findByText('POST /v1/videos')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
   });
 
   it('warns before changing a video model migrated from registry schema v1', async () => {

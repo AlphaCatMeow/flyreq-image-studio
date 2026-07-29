@@ -18,6 +18,7 @@ vi.mock('@/lib/video-job-store', async (importOriginal) => {
 
 describe('VideoGenerationWorkspace', () => {
   beforeEach(() => {
+    vi.unstubAllGlobals();
     applyVideoProtocolConfig();
     localStorage.clear();
     localStorage.setItem('flyreq-locale', 'en');
@@ -39,7 +40,7 @@ describe('VideoGenerationWorkspace', () => {
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   });
 
-  it('renders only supported image-reference and asset-library entries', () => {
+  it('renders all supported reference-media and asset-library entries', () => {
     render(
       <LanguageProvider initialLocale="en">
         <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
@@ -47,14 +48,31 @@ describe('VideoGenerationWorkspace', () => {
     );
 
     expect(screen.getByText('Add image')).toBeInTheDocument();
-    expect(screen.queryByText('Add video')).not.toBeInTheDocument();
-    expect(screen.queryByText('Add audio')).not.toBeInTheDocument();
+    expect(screen.getByText('Add video')).toBeInTheDocument();
+    expect(screen.getByText('Add audio')).toBeInTheDocument();
     expect(screen.getByText('Image assets')).toBeInTheDocument();
-    expect(screen.queryByTestId('video-resolution-icon')).not.toBeInTheDocument();
+    expect(screen.getByTestId('video-resolution-icon')).toBeInTheDocument();
     expect(screen.getByTestId('video-parameter-grid')).toHaveClass('md:grid-cols-3');
     expect(screen.getByLabelText('Submission shortcut')).toBeInTheDocument();
     expect(screen.getByTitle('Configure the default text model first')).toBeDisabled();
     expect(screen.getByTitle('Generate video')).toBeDisabled();
+  });
+
+  it('补齐旧后端缺失的参考视频和音频类型配置', () => {
+    const oldConfig = getVideoProtocolConfig();
+    const oldReferences = oldConfig.protocols.openai.references as Partial<typeof oldConfig.protocols.openai.references>;
+    delete oldReferences.videoMimeTypes;
+    delete oldReferences.audioMimeTypes;
+    applyVideoProtocolConfig(oldConfig);
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    expect(screen.getByText('Add video')).toBeInTheDocument();
+    expect(screen.getByText('Add audio')).toBeInTheDocument();
   });
 
   it('uses the OpenAI Videos duration set and excludes unsupported defaults', () => {
@@ -69,6 +87,24 @@ describe('VideoGenerationWorkspace', () => {
     expect(screen.getByRole('button', { name: '20s' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '6s' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '10s' })).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('1-60 sec')).toBeInTheDocument();
+  });
+
+  it('读取首张参考图尺寸并加入尺寸菜单', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 1536, height: 864, close: vi.fn() }));
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    const imageInput = document.getElementById('image-reference-input') as HTMLInputElement;
+    fireEvent.change(imageInput, { target: { files: [new File(['image'], 'reference.png', { type: 'image/png' })] } });
+    await waitFor(() => expect(vi.mocked(createImageBitmap)).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole('button', { name: '1280x720' }));
+
+    expect(await screen.findByText('Reference image')).toBeInTheDocument();
+    expect(screen.getByText('1536x864')).toBeInTheDocument();
   });
 
   it('拒绝当前协议不支持的参考图 MIME 类型', () => {
@@ -390,8 +426,8 @@ describe('VideoGenerationWorkspace', () => {
     );
 
     expect(screen.getByText('Add image')).toBeInTheDocument();
-    expect(screen.queryByText('Add video')).not.toBeInTheDocument();
-    expect(screen.queryByText('Add audio')).not.toBeInTheDocument();
+    expect(screen.getByText('Add video')).toBeInTheDocument();
+    expect(screen.getByText('Add audio')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('Describe the scene, motion, camera, pacing, and sound you want…')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: '1280x720' })).toBeInTheDocument();
     expect(screen.getByText('Not configured')).toBeInTheDocument();
