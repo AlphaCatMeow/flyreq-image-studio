@@ -20,7 +20,6 @@
 
 FlyReq Image Studio（简称 FlyReq Image）是一个面向个人/团队的 AI 图像生成工作台。前端使用 Next.js 16 + React 19 静态导出（PWA），后端是轻量 Node.js 服务（`server.js` + SQLite + WebSocket），统一调度任务并代理图像生成 API。
 
-本项目基于 [tianjiangqiji/nova-image-studio](https://github.com/tianjiangqiji/nova-image-studio) 修改而来，当前维护仓库为 [doudou770/flyreq-image-studio](https://github.com/doudou770/flyreq-image-studio)。
 
 ## 🧩 支持的图片模型
 
