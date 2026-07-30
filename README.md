@@ -1,10 +1,10 @@
 # FlyReq Image Studio
 
-<p align="right"><strong>English</strong> | <a href="./README.zh-CN.md">简体中文</a></p>
+<p align="right"><strong>简体中文</strong> | <a href="./README.en.md">English</a></p>
 
 <div align="center">
 
-**A self-hosted AI image studio for multi-model workflows, real-time jobs, and production deployments.**
+**自托管的 AI 图像生成工作台 · 多模型协议 · 智能工作流 · 实时任务 · PWA**
 
 [![Version](https://img.shields.io/badge/version-v1.5.1-blue.svg)](https://github.com/doudou770/flyreq-image-studio)
 [![License](https://img.shields.io/badge/license-AGPL--3.0-green.svg)](LICENSE)
@@ -16,38 +16,37 @@
 
 ---
 
-## Overview
+## 📖 简介
 
-FlyReq Image Studio is a self-hosted workspace for AI image generation. It combines a static Next.js 16 + React 19 PWA frontend with a lightweight Node.js, SQLite, and WebSocket backend that queues jobs and proxies image-generation APIs.
+FlyReq Image Studio（简称 FlyReq Image）是一个面向个人/团队的 AI 图像生成工作台。前端使用 Next.js 16 + React 19 静态导出（PWA），后端是轻量 Node.js 服务（`server.js` + SQLite + WebSocket），统一调度任务并代理图像生成 API。
 
-Built from [tianjiangqiji/nova-image-studio](https://github.com/tianjiangqiji/nova-image-studio) and maintained at [doudou770/flyreq-image-studio](https://github.com/doudou770/flyreq-image-studio).
+本项目基于 [tianjiangqiji/nova-image-studio](https://github.com/tianjiangqiji/nova-image-studio) 修改而来，当前维护仓库为 [doudou770/flyreq-image-studio](https://github.com/doudou770/flyreq-image-studio)。
 
-## Supported Image Models
+## 🧩 支持的图片模型
 
-| Provider / family | Model ID |
+| 厂商/系列 | 模型 ID |
 | :--- | :--- |
-| **Banana family** | `gemini-3-pro-image` |
+| **Banana 系列** | `gemini-3-pro-image` |
 | | `gemini-3.1-flash-image` |
 | | `gemini-3.1-flash-lite-image` |
-| **GPT family** | `gpt-image-2` |
+| **GPT 全系列** | `gpt-image-2` |
 | | `gpt-image-1.5` |
 | | `gpt-image-1` |
-| **Grok family** | `grok-imagine-image` |
+| **Grok 系列** | `grok-imagine-image` |
 | | `grok-imagine-image-quality` |
-| **Custom** | Custom model IDs are supported |
+| **自定义** | 支持自定义模型 ID |
 
-### Highlights
+**核心亮点：**
+- **模型不绑定平台**：图片模型与文本模型分别配置，每个模型独立保存 API Key、Base URL、协议和能力边界
+- **模型能力按需呈现**：根据内置预设或自定义能力，自动显示参考图数量、分辨率、temperature、透明背景、质量、风格和输出格式
+- **面向生产部署**：支持部署级首次图片模型、平台名称/Logo/Icon、任务并发和限流配置；已有用户的本地模型配置不会被覆盖
+- **外部链接一键预填模型**：模型供应商或团队门户可通过 URL 带入图片、文本或视频模型配置；页面自动打开设置，用户确认后才保存
+- **长任务稳定性**：OpenAI Images 兼容接口可启用流式图片请求；支持将公网 Base URL 定向到 Docker 内网，避免反向代理和 Cloudflare 长连接超时
+- **可排查的失败信息**：明确区分上游服务错误并保留原始响应；遇到 504 会提示再次重试
+- **本地优先体验**：模型与工作区配置保存于浏览器 localStorage，历史任务、图片素材与配置可一键备份和恢复
 
-- **Provider-neutral models:** Image and text models are configured independently, each with its own API key, base URL, protocol, and capability limits.
-- **Capability-aware controls:** Reference-image limits, output resolution, temperature, transparent backgrounds, quality, style, and output formats appear only when the selected model supports them.
-- **Deployment-ready defaults:** Configure the first image model, product name, logo, icon, queue concurrency, and rate limits through environment variables without overwriting existing users' local models.
-- **Model setup from a link:** Providers and team portals can prefill a model's protocol, model ID, base URL, and capabilities through a URL. Settings open automatically, but the user must confirm before anything is saved.
-- **Reliable long-running jobs:** OpenAI Images-compatible endpoints can use streaming image requests. Public base URLs can be rewritten to Docker-internal addresses to avoid reverse-proxy and Cloudflare timeouts.
-- **Actionable failures:** Upstream errors are clearly marked while preserving the original response body. A 504 response explicitly asks the user to retry.
-- **Local-first workspace:** Browser-side configuration, job history, and assets can be backed up and restored.
 
-
-## Sponsor
+## 💎 赞助商
 
 <table>
   <tr>
@@ -57,106 +56,118 @@ Built from [tianjiangqiji/nova-image-studio](https://github.com/tianjiangqiji/no
       </a>
     </td>
     <td>
-      <strong>Thanks to <a href="https://flyreq.com">FlyReq</a> for sponsoring this project.</strong><br /><br />
-      FlyReq is an AI model API relay platform focused on high-discount access for developers and teams looking for a cost-effective way to connect the models they need.<br /><br />
-      New registrations receive trial credit for validating model capabilities and integration flows. Visit <a href="https://flyreq.com">flyreq.com</a> to learn more and get started.
+      <strong>感谢 <a href="https://flyreq.com">FlyReq</a> 对本项目的赞助支持！</strong><br /><br />
+      FlyReq 是一家提供高折扣 AI 模型 API 中转服务的平台，帮助个人开发者和团队以更具成本优势的方式接入所需模型服务。<br /><br />
+      新用户注册即可获得体验额度，用于验证模型能力和接入流程。访问 <a href="https://flyreq.com">flyreq.com</a> 了解服务详情并开始体验。
     </td>
   </tr>
 </table>
 
 ---
 
-## Product Preview
+## 🖼️ UI 预览
 
-### Image Workspace
+### 生图工作台
 
-| Wide | Narrow | Mobile |
+| 宽屏 | 窄屏 | 手机版 |
 |:---:|:---:|:---:|
-| ![Wide image workspace](doc/生图工作台宽屏.png) | ![Narrow image workspace](doc/生图工作台窄屏.png) | ![Mobile image workspace](doc/生图工作台手机版.png) |
+| ![生图工作台宽屏](doc/生图工作台宽屏.png) | ![生图工作台窄屏](doc/生图工作台窄屏.png) | ![生图工作台手机版](doc/生图工作台手机版.png) |
 
-### Agent Mode
+### Agent 模式
 
-| Planning | Generation |
+| 询问 | 生成 |
 |:---:|:---:|
-| ![Agent planning](doc/Agent模式询问.png) | ![Agent generation](doc/Agent模式生成.png) |
+| ![Agent模式询问](doc/Agent模式询问.png) | ![Agent模式生成](doc/Agent模式生成.png) |
 
-### GIF Workflow
+### GIF 生成
 
-| Generation | Refinement |
+| 生成 | 微调 |
 |:---:|:---:|
-| ![GIF generation](doc/GIF生成.png) | ![GIF refinement](doc/GIF微调.png) |
+| ![GIF生成](doc/GIF生成.png) | ![GIF微调](doc/GIF微调.png) |
 
-### Infinite Canvas
+### 无限画布
 
-![Infinite canvas editor](doc/无限画布编辑.png)
+![无限画布编辑](doc/无限画布编辑.png)
 
-### Prompt Optimization
+### 提示词优化
 
-| Entry point | Result |
+| 入口按钮 | 优化结果 |
 |:---:|:---:|
-| ![Prompt optimization button](doc/提示词优化按钮.png) | ![Prompt optimization result](doc/提示词优化结果.png) |
+| ![提示词优化按钮](doc/提示词优化按钮.png) | ![提示词优化结果](doc/提示词优化结果.png) |
 
-### Inspiration and Assets
+### 灵感与素材
 
-| Prompt Gallery | My Assets |
+| 提示词广场 | 我的素材 |
 |:---:|:---:|
-| ![Prompt gallery](doc/提示词广场.png) | ![My assets](doc/我的素材.png) |
+| ![提示词广场](doc/提示词广场.png) | ![我的素材](doc/我的素材.png) |
 
-### Configuration and Creation
+### 配置与创作
 
-| Reverse Prompt | Settings |
+| 反推提示词 | 设置 |
 |:---:|:---:|
-| ![Reverse prompt](doc/反推提示词.png) | ![Settings](doc/设置.png) |
+| ![反推提示词](doc/反推提示词.png) | ![设置](doc/设置.png) |
 
 ---
 
-## Workflows
+## ✨ 功能特性
 
-| Workflow | What it does |
-| --- | --- |
-| Text to Image | Generate images from prompts with parallel output support. |
-| Image to Image | Edit, transform, or stylize uploaded reference images. |
-| Agent | Turn multi-turn chat into an image plan and generation request, with vision descriptions, web search, and reasoning support. |
-| Reverse Prompt | Stream a prompt analysis from an uploaded image through a configured text model. |
-| GIF Generation | Generate multiple frames, assemble a grid, and encode the GIF in the browser with `gifenc`. |
-| Infinite Canvas | Arrange images and text on a visual workspace, then pass connected context into image generation. |
+### 五大工作模式
 
-## Supported Models and Protocols
-
-| Type | Built-in presets or protocol | Available capabilities |
+| 模式 | 入口 | 简介 |
 | --- | --- | --- |
-| Google image models | Gemini 2.5 Flash Image, Gemini 3 Pro Image Preview, Gemini 3.1 Flash Image Preview, Gemini 3.1 Flash Lite Image | Text-to-image, image-to-image, model-specific reference-image limits, 1K to 4K output, and optional `temperature`. |
-| OpenAI image models | GPT Image 2 and OpenAI Images-compatible endpoints | GPT Image 2 supports text-to-image, image-to-image, up to 16 references, 1K to 4K, quality, style, transparent backgrounds, PNG/JPEG/WebP, custom sizes, and streaming image requests. Compatible gateways expose the parameters their upstream supports. |
-| xAI image models | Grok Imagine and Grok Imagine Quality | xAI Imagine request adapter, 1K or 2K output, and preset-supported aspect ratios. |
-| Text models | Google `generateContent` and OpenAI Responses-compatible endpoints | Reverse prompting, prompt optimization, and Agent chat-to-image planning. |
-| Custom models | `google` or `openai` compatible services | Custom model ID, base URL, API key, reference-image limit, output limit, and capability toggles. |
+| 🎨 文本生图 | `TextToImageForm` | 纯文字提示词生成图像，支持多图并行 |
+| 🖼️ 图生图 | `ImageToImageForm` | 上传参考图，编辑/转换/风格化 |
+| 🤖 Agent 智能体 | `AgentChatWorkspace` | 多轮对话式生成：聊天 → 方案 → 出图，支持 vision 描述、联网搜索、reasoning |
+| 🔍 反推提示词 | `ReversePromptForm` | 上传图片流式反推提示词（支持所有已配置的文字模型） |
+| 🎬 动图生成 | `GifGenerationWorkspace` | 多帧生图 + 网格拼合，浏览器端编码 GIF（`gifenc`） |
 
-Presets define a safe capability boundary, not a provider lock-in. Supply the actual base URL, model ID, and API key for a compatible service. Google and xAI image APIs do not receive `stream=true`; OpenAI Images-compatible GPT Image 2 requests can enable streaming by default.
+### 提示词广场
 
-### Why It Is Different
+`PROMPT_GALLERY_MODE` 三种工作方式：
 
-- **Intent-aware Agent routing:** The Agent considers the requested resolution, available image models, and reference-image aspect ratio, then normalizes settings to the selected model's supported range.
-- **One configuration surface:** Deployment variables provide a branded first-run experience, while external links can hand users a model draft that still requires confirmation.
-- **Compatibility with diagnostics:** Server-side base-URL rewrites route public settings to internal services without changing what users saved. Upstream response bodies are retained for investigation.
-- **Recoverable job system:** SQLite-backed jobs, WebSocket updates, reconnect with polling fallback, on-disk outputs, retry, download, backup, and restore are built in.
+- `1` 常驻：Tab 始终显示
+- `2` 私密：需要密码验证（密码来自后端环境变量 `PROMPT_GALLERY_PASSWORD`）
+- `3` 关闭：完全不显示
 
-## Prompt Gallery
+提示词内容由后端 `backend/prompts.json` 维护，支持敏感词过滤（`backend/blacklist.json`）。
 
-`PROMPT_GALLERY_MODE` controls how the gallery is exposed:
+### 模型系统
 
-- `1`: Always visible.
-- `2`: Private, protected by `PROMPT_GALLERY_PASSWORD`.
-- `3`: Hidden.
+FlyReq Image 采用**用户自定义模型**架构：
 
-Gallery content lives in `backend/prompts.json` and supports filtering through `backend/blacklist.json`.
+- **模型级配置**：每个图片模型和文本模型都独立保存协议、显示名称、模型 ID、API Key 与 Base URL
+- **图像模型**：用户自由添加、编辑、删除，支持设置协议、显示名称、模型 ID、最大参考图数量、最大分辨率
+- **Image 2 额外参数**：仅 OpenAI 图片模型显示，透明背景、质量、风格控件默认开启，用户可手动关闭
+- **流式图片请求**：仅 OpenAI Images 协议显示，可对兼容接口发送 `stream=true`，用于降低 New API / Nginx / Cloudflare 长耗时图片生成时的 504 截断风险；上游不支持时任务直接返回错误
+- **文字模型**：支持自定义扩展，兼容 Gemini 和 OpenAI Response
+- **默认模型**：可为文本生图、图生图、反推提示词、Agent 等任务分别设置默认模型
 
-## External Model Configuration Links
+#### 支持的模型与协议
 
-External sites can link to FlyReq Image with a `provider` query parameter containing one image, text, or video model configuration as JSON. The application opens Settings, fills the corresponding model draft, removes all configuration parameters from the address bar, and waits for the user to save. Importing a link never writes configuration automatically.
+| 类型 | 内置预设或兼容协议 | 可用能力 |
+| --- | --- | --- |
+| Google 图片模型 | Gemini 2.5 Flash Image、Gemini 3 Pro Image Preview、Gemini 3.1 Flash Image Preview、Gemini 3.1 Flash Lite Image | 文生图、图生图、模型允许的参考图数量与 1K 至 4K 输出；可按模型启用 `temperature` |
+| OpenAI 图片模型 | GPT Image 2 及 OpenAI Images 兼容接口 | GPT Image 2 支持文生图、图生图、最多 16 张参考图、1K 至 4K、质量/风格/透明背景/PNG-JPEG-WebP、自定义尺寸和流式图片请求；兼容接口的可用参数取决于其上游实现 |
+| xAI 图片模型 | Grok Imagine、Grok Imagine Quality | xAI Imagine 专用请求格式、1K 或 2K、预设支持的宽高比 |
+| 文字模型 | Google `generateContent`、OpenAI Responses 兼容接口 | 提示词反推、提示词优化、Agent 多轮对话与图像生成方案 |
+| 自定义模型 | `google` 或 `openai` 协议的兼容服务 | 自定义模型 ID、Base URL、API Key、最大参考图数、最大输出规格和能力开关 |
 
-Use URL-encoded JSON in production. The raw links below are readable examples; generate a production value with `encodeURIComponent(JSON.stringify(payload))`.
+预设是能力边界的配置模板，不会限制接入方使用兼容服务；填写实际 Base URL、模型 ID 和 API Key 后即可使用。Google 与 xAI 图片接口不发送 `stream=true`，以保持各自协议约束；OpenAI Images 兼容接口默认可开启流式请求。
 
-### Image model example
+#### 与众不同的工作流能力
+
+- **Agent 按意图选模型**：Agent 会结合用户指定的分辨率、当前可用模型和参考图比例，选择能满足要求且规格合适的图片模型，并把布局参数归一化为该模型支持的范围。
+- **一处配置，多处生效**：外部系统可通过 URL 预填图片、文本或视频模型，并要求用户确认后才保存；部署者可通过环境变量为新用户提供首个默认图片模型、品牌名称、Logo 和浏览器图标。
+- **上游兼容与诊断并存**：服务端可以把用户填写的公网 Base URL 改写为容器内网地址，同时保留用户原始配置；上游返回错误时保留原始内容并标注来源。
+- **任务结果可恢复**：任务经 SQLite 队列持久化，WebSocket 实时同步状态，断线后自动重连并回退轮询；图片落盘保存，历史任务可重试、下载、备份和恢复。
+
+### 外部链接预填模型配置
+
+外部站点可以通过 URL 预填一个图片、文本或视频模型。页面会自动打开“设置”，把参数填入对应模型表单，然后立即清理地址栏中的全部配置参数。用户确认后仍需手动保存，外链导入不会自动写入 `localStorage`。
+
+URL 只需要一个 `provider` 参数，内容是 JSON 字符串。下面使用裸 JSON 方便阅读；生产接入必须使用 `encodeURIComponent(JSON.stringify(payload))` 生成 URL 编码值，避免特殊字符被浏览器、代理或聊天工具改写。
+
+#### 图片模型示例
 
 ```json
 {
@@ -175,18 +186,18 @@ Use URL-encoded JSON in production. The raw links below are readable examples; g
 }
 ```
 
-```text
-https://image.flyreq.com/en/?provider={"type":"image","preset":"gpt-image-2","provider":"openai","modelKey":"flyreq-gpt-image-2","name":"FlyReq","modelId":"gpt-image-2","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","maxRefImages":16,"maxOutputSize":"4K"}
-```
-
-URL-encoded JSON:
+URL编码JSON:
 ```text
 https://image.flyreq.com/zh/?provider=%7B%22type%22%3A%22image%22%2C%22preset%22%3A%22gpt-image-2%22%2C%22provider%22%3A%22openai%22%2C%22modelKey%22%3A%22flyreq-gpt-image-2%22%2C%22name%22%3A%22FlyReq%22%2C%22modelId%22%3A%22gpt-image-2%22%2C%22baseUrl%22%3A%22https%3A%2F%2Fflyreq.com%22%2C%22apiKey%22%3A%22YOUR_API_KEY%22%2C%22maxRefImages%22%3A16%2C%22maxOutputSize%22%3A%224K%22%7D
 ```
 
-When complete, the imported image model becomes the text-to-image and image-to-image default.
+```text
+https://image.flyreq.com/zh/?provider={"type":"image","preset":"gpt-image-2","provider":"openai","modelKey":"flyreq-gpt-image-2","name":"FlyReq","modelId":"gpt-image-2","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","maxRefImages":16,"maxOutputSize":"4K"}
+```
 
-### Text model example
+配置完整时，图片模型会成为文生图和图生图默认模型。
+
+#### 文本模型示例
 
 ```json
 {
@@ -197,17 +208,17 @@ When complete, the imported image model becomes the text-to-image and image-to-i
   "modelId": "gpt-5.4-mini",
   "baseUrl": "https://flyreq.com",
   "apiKey": "YOUR_API_KEY",
-  "note": "OpenAI Responses-compatible text model"
+  "note": "OpenAI Responses 兼容文本模型"
 }
 ```
 
 ```text
-https://image.flyreq.com/en/?provider={"type":"text","provider":"openai","modelKey":"flyreq-text-default","name":"FlyReq Text","modelId":"gpt-5.4-mini","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","note":"OpenAI Responses-compatible text model"}
+https://image.flyreq.com/zh/?provider={"type":"text","provider":"openai","modelKey":"flyreq-text-default","name":"FlyReq Text","modelId":"gpt-5.4-mini","baseUrl":"https://flyreq.com","apiKey":"YOUR_API_KEY","note":"OpenAI Responses 兼容文本模型"}
 ```
 
-When complete, the imported text model becomes the initial default for Agent, reverse prompt, prompt optimization, and image description. Users can change each default before saving. Text models support `openai` and `google`.
+配置完整时，文本模型会成为 Agent、反推提示词、提示词优化和图片描述的初始默认模型；用户保存前可以分别调整。文本模型支持 `openai` 和 `google`。
 
-### Video model example
+#### 视频模型示例
 
 ```json
 {
@@ -222,70 +233,128 @@ When complete, the imported text model becomes the initial default for Agent, re
 ```
 
 ```text
-https://image.flyreq.com/en/?provider={"type":"video","protocol":"openai","modelKey":"flyreq-video-default","name":"FlyReq Video","modelId":"sora-2","baseUrl":"https://api.openai.com","apiKey":"YOUR_API_KEY"}
+https://image.flyreq.com/zh/?provider={"type":"video","protocol":"openai","modelKey":"flyreq-video-default","name":"FlyReq Video","modelId":"sora-2","baseUrl":"https://api.openai.com","apiKey":"YOUR_API_KEY"}
 ```
 
-When complete, the imported video model becomes the video-generation default. Video links accept the `new-api`, `openai`, and `xai` protocols. Use the explicit `protocol` field for new links; the historical `provider=openai` form remains mapped to the legacy video endpoint.
+配置完整时，视频模型会成为视频生成默认模型。视频外链接受 `new-api`、`openai` 与 `xai` 三种协议。新链接必须使用显式 `protocol` 字段；历史 `provider=openai` 格式继续映射到旧版视频端点。
 
-Every video-upstream request and response for creation, polling, and result download is written as a structured `[video-upstream]` log and appended to a daily JSONL file at `backend/logs/video-upstream/video-upstream-YYYY-MM-DD.log` using the process-local date. Every stage record includes the local `taskId`, display model name, upstream model ID, resolution, and current elapsed time. A final `task-summary` record captures the terminal status and exact `totalDurationMs` when a task completes, fails, or is cancelled. The log also includes the stage, method, URL, HTTP status, headers, request parameters, response body, and task context. API keys, authorization headers, cookies, and signed-URL query parameters are sanitized; data URLs and multipart media are reduced to type, name, and byte-count metadata. Responses with a `video/*` content type are represented only by a media-type and byte-count placeholder, so video bodies are never written to logs. Logging is enabled by default and can be disabled with `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED=false`. Ordinary response bodies are limited to 65,536 characters by default and can be adjusted with `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS`; the directory can be changed with `FLYREQ_VIDEO_UPSTREAM_LOG_DIR`. Docker Compose persists `/app/backend/logs` under host `./logs` and defaults daily rotation to the `Asia/Shanghai` timezone.
+视频上游每次创建、轮询和结果下载的请求与响应都会输出 `[video-upstream]` 结构化日志，并按本地日期写入 `backend/logs/video-upstream/video-upstream-YYYY-MM-DD.log` JSONL 文件。每条阶段日志都包含本地 `taskId`、模型显示名称、上游模型 ID、清晰度和当前耗时；任务完成、失败或取消时还会写入 `task-summary` 终态记录及精确的 `totalDurationMs` 总耗时。日志同时包含请求阶段、方法、URL、HTTP 状态、请求头、请求参数、响应头、响应正文和任务上下文。API Key、认证头、Cookie、签名查询参数会自动脱敏；data URL 与 multipart 媒体只记录类型、名称和字节数；`Content-Type` 为 `video/*` 的响应只记录媒体类型和字节数占位符，不会写入视频正文。日志默认开启，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED=false` 关闭；单条普通响应正文默认最多记录 65536 字符，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` 调整，落盘目录可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` 修改。Docker Compose 默认将宿主机 `./logs` 挂载到 `/app/backend/logs`，并使用 `Asia/Shanghai` 时区分割日期。
 
-### Fields and behavior
+#### 字段与行为
 
-| Field | Description |
+| 字段 | 说明 |
 | --- | --- |
-| `type` | Required model kind: `image`, `text`, or `video`. Omitted values default to `image` for compatibility. |
-| `modelKey` | Optional stable model ID. Updates an existing model with the same ID. |
-| `provider` / `protocol` | `openai` or `google` for image/text models; video models support `new-api`, `openai`, or `xai`. New video links must use `protocol`; historical `provider=openai` links retain legacy endpoint behavior. |
-| `name` | Display name. |
-| `modelId` | Upstream model ID. |
-| `baseUrl` | Upstream base URL. |
-| `apiKey` | API key. |
-| `preset` | Image only. Optional built-in preset such as `gpt-image-2`. |
-| `maxRefImages` | Image only. Maximum reference-image count. |
-| `maxOutputSize` | Image only: `512`, `1K`, `2K`, or `4K`. |
-| `supportsTemperature` | Image only. Enables Gemini `temperature` when supported upstream. |
-| `streamImages` | Image only. Enables streaming OpenAI Images-compatible requests. |
-| `note` | Text only. Optional protocol or deployment description. |
+| `type` | 模型类型：`image`、`text` 或 `video`；省略时为兼容旧链接默认使用 `image` |
+| `modelKey` | 可选，稳定模型 ID；存在同 ID 时更新该模型 |
+| `provider` / `protocol` | 图片、文本支持 `openai` 或 `google`；视频支持 `new-api`、`openai` 或 `xai`。新视频链接使用 `protocol`，历史 `provider=openai` 保留旧版端点行为 |
+| `name` | 显示名称 |
+| `modelId` | 上游模型 ID |
+| `baseUrl` | 上游 Base URL |
+| `apiKey` | API Key |
+| `preset` | 仅图片模型，可选内置模板，如 `gpt-image-2` |
+| `maxRefImages` | 仅图片模型，最大参考图数量 |
+| `maxOutputSize` | 仅图片模型：`512`、`1K`、`2K`、`4K` |
+| `supportsTemperature` | 仅图片模型，上游兼容时允许发送 Gemini `temperature` |
+| `streamImages` | 仅图片模型，启用 OpenAI Images 兼容流式请求 |
+| `note` | 仅文本模型，可选的协议或部署说明 |
 
-Matching first uses `modelKey`, then `name + modelId + baseUrl`; otherwise, a new draft is added. Incomplete payloads are retained as inactive drafts so the user can add missing fields. Legacy `configureModel=1&type=...` multi-parameter links remain supported for all three types, and every recognized parameter is removed after parsing.
+匹配规则：优先按 `modelKey` 更新已有模型；没有 `modelKey` 时，按 `name + modelId + baseUrl` 匹配；仍未匹配则新增草稿。不完整配置会作为未激活草稿保留，用户可以补齐后保存。旧版 `configureModel=1&type=...` 多参数链接仍支持三种类型，识别后会删除所有配置参数。
 
-The API key is briefly present in browser history, proxy logs, chat previews, and referrer metadata before the application cleans the URL. Prefer short-lived keys or omit `apiKey` and let the user enter it locally.
+安全提示：应用清理 URL 前，API Key 仍可能短暂出现在浏览器历史、代理日志、聊天预览和 Referer 信息中。推荐使用短期 Key，或在外链中省略 `apiKey`，让用户在本地填写。
 
-## Deployment
+### 任务系统
+
+- 提交后入队，服务端并发处理（默认上限 50，可通过 `FLYREQ_TASK_CONCURRENCY` 调整）
+- 浏览器通过 **WebSocket** 实时接收任务/队列状态，断线自动重连，失败 5 次后回退 **HTTP 轮询**（30 秒间隔）
+- 任务结果本地落盘（`backend/flyreq-images/`），HTTP 路由 `/api/flyreq/images/:taskId/:index` 直接提供
+- 任务 TTL 12 小时，过期自动清理（5 分钟一次）
+- 服务重启时把残留"处理中"任务标记为失败并删除产物，避免幽灵任务
+
+### 体验与工程化
+
+- PWA（`next-pwa`），可安装到桌面
+- 三端兼容 UI：桌面端、平板端、移动端自适应布局，提供一致的用户体验
+- 暗色 / 亮色主题切换
+- 宽屏 / 窄屏自适应布局（左侧垂直 Tab + 右侧内容）
+- 历史任务持久化（IndexedDB / localStorage）
+- 一键备份 / 恢复（`JSZip` 打包 localStorage + IndexedDB，支持跳过不兼容旧配置并恢复其余数据）
+- 历史图片懒加载（`@tanstack/react-virtual`）
+- 随机图、Toast 通知、确认对话框
+
+---
+
+## 📁 项目结构
+
+```text
+flyreq-image-studio/
+├── frontend/                 # Next.js 前端（React 19 + TS）
+│   ├── src/
+│   │   ├── app/              # 根页面 layout.tsx / page.tsx
+│   │   ├── components/       # 业务组件 + shadcn/ui 基础组件
+│   │   │   ├── workspace/    # 主工作台壳、Tab、Header、结果区
+│   │   │   ├── agent/        # Agent 模式相关组件
+│   │   │   └── ui/           # shadcn 风格 UI 基础件
+│   │   ├── hooks/            # useQueueStatus / useAgentChat / useGifWorkflow / ...
+│   │   ├── lib/              # 客户端工具、API 客户端、WebSocket、备份
+│   │   └── test/             # vitest 配置与用例
+│   ├── public/               # PWA 图标、静态资源
+│   ├── next.config.ts        # 静态导出 + next-pwa 配置
+│   ├── package.json
+│   └── vitest.config.ts
+├── backend/
+│   ├── server.js             # Node 服务（HTTP + WS + SQLite + 任务队列）
+│   ├── prompts.json          # 提示词广场内容
+│   ├── blacklist.json        # 敏感词
+│   ├── .env.example
+│   └── package.json
+├── scripts/
+│   ├── pack.js               # 打包：build + 汇总到 out.zip
+│   └── generate-icons.js     # 生成 PWA 图标
+├── package.json              # npm workspaces 根
+├── LICENSE                   # AGPL-3.0 许可证
+├── README.md
+└── README.en.md
+```
+
+> 生产构建会输出到 `frontend/out/`，由后端 `server.js` 静态托管。
+
+---
+
+## 🚀 部署指南
 
 <details>
-<summary><strong>Docker Compose deployment</strong></summary>
+<summary><strong>🐳 Docker Compose 部署</strong></summary>
 
-### Requirements
+### 前置要求
 
 - Docker 20.10+
 - Docker Compose v2
 
-### Quick start
+### 快速启动
 
-The default installation directory is `/opt/fis`. The following commands download the four files required for deployment directly from [doudou770/flyreq-image-studio](https://github.com/doudou770/flyreq-image-studio):
+默认安装目录为 `/opt/fis`。下面命令会直接从 [doudou770/flyreq-image-studio](https://github.com/doudou770/flyreq-image-studio) 下载部署所需的 4 个文件：
 
-- `docker-compose.yml`: Docker Compose service definition
-- `.env`: backend runtime configuration
-- `prompts.json`: Prompt Gallery content
-- `blacklist.json`: sensitive-word configuration
+- `docker-compose.yml`：Docker Compose 服务定义
+- `.env`：后端运行配置
+- `prompts.json`：提示词广场数据
+- `blacklist.json`：敏感词配置
 
 ```bash
-# 1. Create and enter the deployment directory
+# 1. 创建并进入部署目录
 sudo mkdir -p /opt/fis
 cd /opt/fis
 
-# 2. Download the Docker Compose configuration
+# 2. 下载 Docker Compose 配置
 sudo curl -fsSL \
   https://raw.githubusercontent.com/doudou770/flyreq-image-studio/master/docker-compose.yml \
   -o docker-compose.yml
 
-# 3. Download the environment template as .env
+# 3. 下载环境变量模板为 .env
 sudo curl -fsSL \
   https://raw.githubusercontent.com/doudou770/flyreq-image-studio/master/backend/.env.example \
   -o .env
 
-# 4. Download prompt and blacklist configuration
+# 4. 下载提示词与敏感词配置
 sudo curl -fsSL \
   https://raw.githubusercontent.com/doudou770/flyreq-image-studio/master/backend/prompts.json \
   -o prompts.json
@@ -293,29 +362,33 @@ sudo curl -fsSL \
   https://raw.githubusercontent.com/doudou770/flyreq-image-studio/master/backend/blacklist.json \
   -o blacklist.json
 
-# 5. Create the persistent data directory
+# 5. 创建持久化数据目录
 sudo mkdir -p data
 
-# 6. Edit configuration when needed
+# 6. 按需编辑配置（可选）
 sudo nano .env
 
-# 7. Start the service
+# 7. 启动服务
 sudo docker compose up -d
 ```
 
-Open <http://localhost:3001> after startup. `docker-compose.yml` uses:
+访问 <http://localhost:3001>。
+
+`docker-compose.yml` 默认使用：
 
 ```yaml
 image: ghcr.io/doudou770/flyreq-image-studio:latest
 ```
 
-If the GitHub Container Registry package is private, authenticate first:
+如果 GitHub Packages 中的镜像包被设置为私有，需要先登录 GHCR：
 
 ```bash
 echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 ```
 
-### File layout and persistence
+### 文件布局
+
+部署完成后，`/opt/fis` 目录结构如下：
 
 ```text
 /opt/fis/
@@ -326,45 +399,51 @@ echo YOUR_GITHUB_TOKEN | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password
 └── data/
 ```
 
-The Compose file persists the task database and generated images under `/opt/fis/data/` through:
+`docker-compose.yml` 已内置持久化路径：
 
 ```yaml
 FLYREQ_TASK_DB: /app/backend/data/flyreq-tasks.sqlite
 FLYREQ_IMAGE_DIR: /app/backend/data/flyreq-images
 ```
 
-The default Compose file joins the common 1Panel external network `1panel-network`, allowing Docker-internal access to services such as new-api. Change the `networks` name for another 1Panel network. Outside 1Panel, remove that network configuration or create it first:
+因此任务数据库和生成图片都会落在宿主机 `/opt/fis/data/` 下。
+
+`docker-compose.yml` 默认加入 1Panel 常用外部网络 `1panel-network`，便于直接通过 Docker 内网访问同一网络中的 new-api 等服务。若你的 1Panel 网络名称不同，请修改 `docker-compose.yml` 里的 `networks` 名称；若不是 1Panel 环境，可删除 `networks` 配置或先创建同名网络：
 
 ```bash
 sudo docker network create 1panel-network
 ```
 
-### Runtime configuration and updates
+### 环境变量
 
-Configure the container through `/opt/fis/.env`; no image rebuild is required. Restart the container after changing startup settings such as `PORT`, `HOSTNAME`, or `NODE_ENV`:
+通过 `/opt/fis/.env` 注入，无需修改镜像。
+
+`PORT`、`HOSTNAME`、`NODE_ENV` 这类启动参数修改后需要重启容器：
 
 ```bash
 cd /opt/fis
 sudo docker compose restart
 ```
 
-Queue, rate-limit, and Prompt Gallery settings are refreshed by the backend and normally take effect after saving `.env` without a restart.
+队列、限流、提示词广场等运行时配置会被后端定期读取，保存 `.env` 后通常无需重启即可生效。
 
-Use `FLYREQ_BASE_URL_REWRITE_MAP` when users configure a public base URL but server-side requests should use a Docker-internal address:
+如果用户模型中填写的是公开 Base URL，但希望服务端实际请求走 Docker 内网地址，可以配置 `FLYREQ_BASE_URL_REWRITE_MAP`。例如用户仍填写 `https://flyreq.com`，后端实际请求同一 1Panel 网络里的 new-api 容器：
 
 ```env
 FLYREQ_BASE_URL_REWRITE_MAP={"https://flyreq.com":"http://new-api:3000"}
 ```
 
-Multiple mappings are supported:
+支持多个映射：
 
 ```env
 FLYREQ_BASE_URL_REWRITE_MAP={"https://flyreq.com":"http://new-api:3000","https://api.example.com":"http://example-new-api:3000"}
 ```
 
-Matching ignores a trailing `/v1` or `/v1beta`. The mapping changes only outbound server requests and never changes a user's saved model configuration.
+匹配会自动忽略末尾 `/v1` 或 `/v1beta`：用户填 `https://flyreq.com/v1` 也会命中 `https://flyreq.com`。映射只影响后端出站请求，不会改写用户保存的模型配置。
 
-Upgrade with:
+### 升级
+
+拉取最新镜像并重建容器：
 
 ```bash
 cd /opt/fis
@@ -372,29 +451,39 @@ sudo docker compose pull
 sudo docker compose up -d --force-recreate
 ```
 
-Back up the entire `/opt/fis` directory to retain `flyreq-images/`, `flyreq-tasks.sqlite`, and the SQLite WAL/SHM runtime files.
+### 数据持久化
+
+以下内容自动持久化在 `/opt/fis/data/`：
+
+- `flyreq-images/`：生成的图片
+- `flyreq-tasks.sqlite`：任务数据库
+- `flyreq-tasks.sqlite-wal` / `flyreq-tasks.sqlite-shm`：SQLite 运行文件
+
+备份时建议直接备份整个 `/opt/fis` 目录。
 
 </details>
 
 <details>
-<summary><strong>Local production deployment</strong></summary>
+<summary><strong>📦 本地部署（生产环境）</strong></summary>
 
-### Requirements
+### 环境要求
 
-- Node.js 20 or 22
-- npm with workspace support
-- `better-sqlite3` is native: run `npm ci --omit=dev` on the production server. Do not copy a local `node_modules` directory.
+- **Node.js**：20 或 22
+- **npm**：自带 workspaces 支持
+- `better-sqlite3` 是原生依赖，**生产服务器必须本地 `npm ci --omit=dev`**，不要直接复制本机 `node_modules`
 
-### Deployment steps
+### 部署步骤
 
-Build on the build machine:
+#### 1. 在构建机
 
 ```bash
 npm ci
 npm run build
 ```
 
-Upload the following to the production server:
+产物 `frontend/out/` 已生成。
+
+#### 2. 上传以下到生产服务器
 
 ```text
 frontend/out/
@@ -403,275 +492,265 @@ backend/package.json
 backend/package-lock.json
 backend/prompts.json
 backend/blacklist.json
-backend/.env
+backend/.env          # 按生产环境调整
 ```
 
-Then install and run on the production server:
+#### 3. 在生产服务器
 
 ```bash
-npm ci --omit=dev
-npm start
+npm ci --omit=dev        # 必须本地装 better-sqlite3 原生模块
+npm start                # 或 npm run server
 ```
 
-Set `NODE_ENV=production` in `.env`. Use PM2, systemd, or your platform process manager. The process needs read/write access to `FLYREQ_TASK_DB`, and the reverse proxy should route the domain to `http://127.0.0.1:3001`.
+`.env` 中 `NODE_ENV=production`。
 
-Create a deployable archive with:
+#### 4. 进程托管
+
+推荐 **PM2 / systemd / 平台自带进程管理**，确保：
+
+- 进程对 `FLYREQ_TASK_DB` 指向的 SQLite 文件有读写权限
+- 反向代理（Nginx / Caddy / 云网关）将域名转到 `http://127.0.0.1:3001`
+
+#### 5. 一键打包
 
 ```bash
 npm run go
 ```
 
-It produces `out.zip` at the repository root.
+生成根目录 `out.zip`，解压后即可按上面 1~3 步骤部署。
 
 </details>
 
 <details>
-<summary><strong>Local development</strong></summary>
+<summary><strong>💻 本地开发</strong></summary>
 
-### Requirements
+### 环境要求
 
-- Node.js 20 or 22
-- npm with workspace support
+- **Node.js**：20 或 22
+- **npm**：自带 workspaces 支持
 
-### Install and run
+### 安装与运行
 
 ```bash
+# 1. 克隆仓库
 git clone https://github.com/doudou770/flyreq-image-studio.git
 cd flyreq-image-studio
+
+# 2. 安装依赖（自动安装根、frontend、backend）
 npm install
+
+# 3. 复制后端环境变量
 cp backend/.env.example backend/.env
 # Windows: Copy-Item backend/.env.example backend/.env
+
+# 4. 启动开发模式（等同于 build 后用 production 模式跑 server.js）
 npm run dev
 ```
 
-Open <http://localhost:3001>. At first startup, the image workspace uses the deployment default image model, or the FlyReq / GPT Image 2 preset if no deployment default is configured. API keys are not delivered through deployment settings. Add image and text model API keys in **Settings**, then confirm workflow defaults. Browser-side configuration can be exported through backup.
+访问 <http://localhost:3001>。
 
-### Common scripts
+> 首次启动时，图片模型会使用部署者配置的默认模型（未配置时使用 FlyReq / GPT Image 2 预设）；出于安全原因不会下发 API Key。请在 UI 的“设置”中填写图片模型 API Key，并至少配置一个文本模型及其 API Key，再确认各任务的默认模型。所有前端配置均保存在浏览器 localStorage，可通过备份功能导出。
+
+### 常用开发脚本
 
 ```bash
-npm run dev:frontend   # Next.js dev server only (HMR; no static export)
-npm run dev:backend    # backend server.js only
-npm run build          # static frontend output in frontend/out/
-npm start              # backend server.js
-npm run lint           # frontend ESLint
-npm test               # Vitest watch mode
-npm run test:run       # Vitest once
-npm run go             # build and package root out.zip
+npm run dev:frontend   # 仅启动 Next.js dev server（HMR，不走静态导出）
+npm run dev:backend    # 仅启动后端 server.js
+npm run build          # 构建前端静态产物到 frontend/out/
+npm start              # 直接跑后端 server.js
+npm run lint           # 前端 ESLint
+npm test               # 前端 Vitest watch
+npm run test:run       # 前端 Vitest 单次
+npm run go             # 打包：build + 汇总到根 out.zip
 ```
 
 </details>
 
 <details>
-<summary><strong>Build a Docker image</strong></summary>
+<summary><strong>🔨 Docker 镜像构建</strong></summary>
+
+### 构建镜像
 
 ```bash
 docker build -t flyreq-image-studio:latest .
+```
+
+### 推送到仓库
+
+```bash
 docker tag flyreq-image-studio:latest ghcr.io/doudou770/flyreq-image-studio:latest
+
 docker push ghcr.io/doudou770/flyreq-image-studio:latest
 ```
 
 </details>
 
 <details>
-<summary><strong>GitHub Actions release</strong></summary>
+<summary><strong>🚢 GitHub Actions 发布</strong></summary>
 
-Run `.github/workflows/release.yml` from **Actions -> Release -> Run workflow** on `master`, then choose `patch`, `minor`, or `major`. The workflow calculates the next `vX.Y.Z` tag, creates the GitHub Release, passes the version to the Docker image as `APP_VERSION`, and publishes these images:
+仓库内置手动发布工作流：`.github/workflows/release.yml`。
 
-- `ghcr.io/doudou770/flyreq-image-studio:latest`
-- `ghcr.io/doudou770/flyreq-image-studio:X.Y.Z`
-- `ghcr.io/doudou770/flyreq-image-studio:vX.Y.Z`
+在 GitHub 页面进入 **Actions → Release → Run workflow**，选择 `patch` / `minor` / `major` 后运行即可。工作流会固定检出 `master` 分支，并自动完成：
 
-The built-in `GITHUB_TOKEN` requires Actions permission to write `contents` and `packages`.
+- 读取最新 `vX.Y.Z` tag，按选择的类型自增版本号
+- 创建并推送新的 git tag，例如 `v1.5.1`
+- 创建 GitHub Release，并自动生成 release notes
+- 将 tag 版本写入 Docker 镜像的 `APP_VERSION`，自动展示在 UI 的“关于”页
+- 构建 Docker 镜像并推送到 GitHub Packages：
+  - `ghcr.io/doudou770/flyreq-image-studio:latest`
+  - `ghcr.io/doudou770/flyreq-image-studio:X.Y.Z`
+  - `ghcr.io/doudou770/flyreq-image-studio:vX.Y.Z`
+
+工作流使用仓库内置的 `GITHUB_TOKEN`，需要在仓库设置中允许 Actions 写入 `contents` 和 `packages`。
 
 </details>
 
-### Important Environment Variables
+---
 
-| Variable | Required | Default | Description |
+## ⚙️ 环境变量（`backend/.env`）
+
+| 变量 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- |
-| `PORT` | No | `3001` | Listening port. |
-| `HOSTNAME` | No | `0.0.0.0` | Bind address. `localhost` and `127.0.0.1` are local-only. |
-| `NODE_ENV` | **Yes** | `production` | **Must be `production`**; otherwise the Next development server is used. |
-| `FLYREQ_TASK_DB` | No | `./flyreq-tasks.sqlite` | SQLite database path. Use a persistent directory. |
-| `FLYREQ_TASK_CONCURRENCY` | No | `50` | Maximum concurrent jobs; hard limit is 50. |
-| `FLYREQ_MAX_QUEUE_SIZE` | No | `200` | Maximum pending jobs globally. |
-| `FLYREQ_RATE_LIMIT_WINDOW_MS` | No | `60000` | Task-creation rate-limit window in milliseconds. |
-| `FLYREQ_RATE_LIMIT_MAX_REQUESTS_PER_IP` | No | `20` | Maximum task creations per IP in one window. |
-| `FLYREQ_RATE_LIMIT_MAX_REQUESTS_PER_API_KEY` | No | `20` | Maximum task creations per API key in one window. |
-| `FLYREQ_MAX_PENDING_TASKS_PER_IP` | No | `20` | Maximum pending jobs per IP. |
-| `FLYREQ_MAX_PENDING_TASKS_PER_API_KEY` | No | `20` | Maximum pending jobs per API key. |
-| `FLYREQ_RATE_LIMIT_RETRY_AFTER_SECONDS` | No | `30` | `Retry-After` seconds for a full queue or rate limit. |
-| `FLYREQ_IMAGE_DIR` | No | `backend/flyreq-images/` | Directory for generated image files. |
-| `FLYREQ_BASE_URL_REWRITE_MAP` | No | Empty | Outbound base-URL rewrite map, for example `{"https://flyreq.com":"http://new-api:3000"}`. |
-| `FLYREQ_OUTBOUND_USER_AGENT` | No | `FlyReq-Image-Studio/1.5.1` | Stable identifier sent upstream. Use a deployment-traceable product name; do not impersonate browsers or third-party services. |
-| `FLYREQ_PLATFORM_NAME` | No | `FlyReq Image` | Product name used in the page title, header, Settings, and PWA. |
-| `FLYREQ_PLATFORM_LOGO_URL` | No | `/favicon.png` | Header logo; use a square PNG/WebP/SVG image of at least `128x128`. |
-| `FLYREQ_PLATFORM_ICON_URL` | No | `/favicon.png` | Browser favicon; use a `48x48` PNG or ICO. It is not reused as a PWA install icon. |
-| `FLYREQ_PWA_ICON_192_URL` | No | `/icon-192.png` | Standard PWA icon; must be a `192x192` PNG. |
-| `FLYREQ_PWA_ICON_512_URL` | No | `/icon-512.png` | High-resolution PWA icon; must be a `512x512` PNG. |
-| `FLYREQ_PWA_MASKABLE_ICON_512_URL` | No | `/icon-maskable-512.png` | Maskable PWA icon; must be a `512x512` PNG with important content inside the central 80% safe zone. |
-| `FLYREQ_IMAGE_MODEL_KEY_GUIDE_TITLE` | No | `Need an image model API key?` | Image-model key guide title in Settings. |
-| `FLYREQ_IMAGE_MODEL_KEY_GUIDE_DESCRIPTION` | No | FlyReq default description | Image-model key guide description in Settings. |
-| `FLYREQ_IMAGE_MODEL_KEY_GUIDE_CTA_LABEL` | No | `Visit flyreq.com` | Image-model key guide button label. |
-| `FLYREQ_IMAGE_MODEL_KEY_GUIDE_URL` | No | `https://flyreq.com` | Image-model key guide destination. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_KEY` | No | `flyreq-gpt-image-2` | Stable internal key for the first default image model. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_NAME` | No | `FlyReq` | Display name of the first default image model. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_PROTOCOL` | No | `openai` | First default image-model protocol: `openai` or `google`. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_BASE_URL` | No | `https://flyreq.com` | Base URL of the first default image model. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_MODEL_ID` | No | Empty | Actual model ID. When blank, the preset model-ID mapping is used. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_PRESET` | No | `gpt-image-2` | Built-in image preset ID, which defines the capability boundary. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_MAX_REF_IMAGES` | No | `16` | Maximum reference images, from 1 to 16. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_MAX_OUTPUT_SIZE` | No | `4K` | Maximum output size: `512`, `1K`, `2K`, or `4K`. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_SUPPORTS_ADVANCED_PARAMS` | No | `true` | Enables GPT Image 2 advanced parameters by default. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_SUPPORTS_TEMPERATURE` | No | `false` | Whether the Google image model supports `temperature` by default. |
-| `FLYREQ_DEFAULT_IMAGE_MODEL_STREAM_IMAGES` | No | `true` | Enables streaming image requests for OpenAI GPT Image 2 by default. |
-| `FLYREQ_DEFAULT_VIDEO_MODEL_KEY` | No | `flyreq-sora-2` | Stable internal key for the first default video model. |
-| `FLYREQ_DEFAULT_VIDEO_MODEL_NAME` | No | `FlyReq` | Display name of the first default video model. |
-| `FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL` | No | `openai` | First default video-model protocol: `new-api`, `openai`, or `xai`. |
-| `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` | No | `https://flyreq.com` | Base URL of the first default video model. |
-| `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID` | No | `sora-2` | Upstream model ID of the first default video model. |
-| `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` | No | Empty | JSON Merge Patch for video protocol capabilities; objects merge recursively, arrays replace, and `null` deletes a field. |
-| `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED` | No | `true` | Logs every video-upstream request and response during creation, polling, and download. Set `false`, `0`, `no`, or `off` to disable it. |
-| `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` | No | `65536` | Maximum logged characters for one video-upstream response body, constrained to `1024-1048576`. |
-| `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` | No | `backend/logs/video-upstream` | Directory for date-split video-upstream JSONL logs; Docker Compose uses `/app/backend/logs/video-upstream`. |
-| `PROMPT_GALLERY_MODE` | No | `2` | `1` always visible / `2` password-protected / `3` hidden. |
-| `PROMPT_GALLERY_PASSWORD` | No | Empty | Prompt Gallery password in private mode. Private mode opens directly when empty. |
+| `PORT` | 否 | `3001` | 监听端口 |
+| `HOSTNAME` | 否 | `0.0.0.0` | 绑定地址，`localhost`/`127.0.0.1` 仅本机 |
+| `NODE_ENV` | **是** | `production` | **必须为 `production`**，否则会走 Next dev 模式 |
+| `FLYREQ_TASK_DB` | 否 | `./flyreq-tasks.sqlite` | SQLite 文件路径，建议放到持久化目录 |
+| `FLYREQ_TASK_CONCURRENCY` | 否 | `50` | 最大并发任务数（绝对上限 50） |
+| `FLYREQ_MAX_QUEUE_SIZE` | 否 | `200` | 全局最大待处理任务数 |
+| `FLYREQ_RATE_LIMIT_WINDOW_MS` | 否 | `60000` | 创建任务速率限制窗口，单位毫秒 |
+| `FLYREQ_RATE_LIMIT_MAX_REQUESTS_PER_IP` | 否 | `20` | 单 IP 在一个窗口内最多创建多少个任务 |
+| `FLYREQ_RATE_LIMIT_MAX_REQUESTS_PER_API_KEY` | 否 | `20` | 单 API Key 在一个窗口内最多创建多少个任务 |
+| `FLYREQ_MAX_PENDING_TASKS_PER_IP` | 否 | `20` | 单 IP 最多同时拥有多少个待处理任务 |
+| `FLYREQ_MAX_PENDING_TASKS_PER_API_KEY` | 否 | `20` | 单 API Key 最多同时拥有多少个待处理任务 |
+| `FLYREQ_RATE_LIMIT_RETRY_AFTER_SECONDS` | 否 | `30` | 队列满/限流时响应头 `Retry-After` 秒数 |
+| `FLYREQ_IMAGE_DIR` | 否 | `backend/flyreq-images/` | 任务产物落盘目录 |
+| `FLYREQ_BASE_URL_REWRITE_MAP` | 否 | 空 | Base URL 出站改写表；例如 `{"https://flyreq.com":"http://new-api:3000"}` |
+| `FLYREQ_OUTBOUND_USER_AGENT` | 否 | `FlyReq-Image-Studio/1.5.1` | 上游请求携带的稳定服务标识；请配置为部署方可追溯的产品名称，不要伪造浏览器或第三方服务身份 |
+| `FLYREQ_PLATFORM_NAME` | 否 | `FlyReq Image` | 平台名称；用于页面标题、Header、设置页和 PWA 名称 |
+| `FLYREQ_PLATFORM_LOGO_URL` | 否 | `/favicon.png` | Header Logo；建议正方形且至少 `128x128`，支持 PNG/WebP/SVG |
+| `FLYREQ_PLATFORM_ICON_URL` | 否 | `/favicon.png` | 浏览器 favicon；建议使用 `48x48` PNG 或 ICO，不作为 PWA 安装图标 |
+| `FLYREQ_PWA_ICON_192_URL` | 否 | `/icon-192.png` | PWA 普通图标；必须为 `192x192` PNG |
+| `FLYREQ_PWA_ICON_512_URL` | 否 | `/icon-512.png` | PWA 高清普通图标；必须为 `512x512` PNG |
+| `FLYREQ_PWA_MASKABLE_ICON_512_URL` | 否 | `/icon-maskable-512.png` | PWA Maskable 图标；必须为 `512x512` PNG，重要内容放在中心 80% 安全区域 |
+| `FLYREQ_IMAGE_MODEL_KEY_GUIDE_TITLE` | 否 | `还没有图片模型 API Key？` | 设置页图片模型 Key 指引标题 |
+| `FLYREQ_IMAGE_MODEL_KEY_GUIDE_DESCRIPTION` | 否 | FlyReq 默认说明 | 设置页图片模型 Key 指引描述 |
+| `FLYREQ_IMAGE_MODEL_KEY_GUIDE_CTA_LABEL` | 否 | `前往 flyreq.com` | 设置页图片模型 Key 指引按钮文字 |
+| `FLYREQ_IMAGE_MODEL_KEY_GUIDE_URL` | 否 | `https://flyreq.com` | 设置页图片模型 Key 指引跳转地址 |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_KEY` | 否 | `flyreq-gpt-image-2` | 首次默认图片模型的稳定内部 Key |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_NAME` | 否 | `FlyReq` | 首次默认图片模型的显示名称 |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_PROTOCOL` | 否 | `openai` | 首次默认图片模型协议：`openai` 或 `google` |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_KEY` | 否 | `flyreq-sora-2` | 首次默认视频模型的稳定内部 Key |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_NAME` | 否 | `FlyReq` | 首次默认视频模型的显示名称 |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL` | 否 | `openai` | 首次默认视频模型协议：`new-api`、`openai` 或 `xai` |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` | 否 | `https://flyreq.com` | 首次默认视频模型的 Base URL |
+| `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID` | 否 | `sora-2` | 首次默认视频模型的上游模型 ID |
+| `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` | 否 | 空 | 视频协议能力的 JSON Merge Patch 覆盖；对象递归合并，数组整体替换，`null` 删除字段 |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED` | 否 | `true` | 是否记录视频上游创建、轮询和下载阶段的每次请求与响应；`false`、`0`、`no`、`off` 关闭 |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` | 否 | `65536` | 单条视频上游响应正文的最大日志字符数，范围 `1024-1048576` |
+| `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` | 否 | `backend/logs/video-upstream` | 按日期分割的视频上游 JSONL 日志目录；Docker Compose 使用 `/app/backend/logs/video-upstream` |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_BASE_URL` | 否 | `https://flyreq.com` | 首次默认图片模型的 Base URL |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_MODEL_ID` | 否 | 空 | 实际模型 ID；留空时使用预设模型 ID 映射 |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_PRESET` | 否 | `gpt-image-2` | 内置图片预设 ID，决定模型能力边界 |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_MAX_REF_IMAGES` | 否 | `16` | 最大参考图数量，范围 `1-16` |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_MAX_OUTPUT_SIZE` | 否 | `4K` | 最大输出规格：`512`、`1K`、`2K`、`4K` |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_SUPPORTS_ADVANCED_PARAMS` | 否 | `true` | 是否默认启用 GPT Image 2 额外参数 |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_SUPPORTS_TEMPERATURE` | 否 | `false` | Google 图片模型是否默认支持 temperature |
+| `FLYREQ_DEFAULT_IMAGE_MODEL_STREAM_IMAGES` | 否 | `true` | 是否默认开启 OpenAI GPT Image 2 流式图片请求 |
+| `PROMPT_GALLERY_MODE` | 否 | `2` | `1` 常驻 / `2` 私密密码（点七下标题） / `3` 关闭 |
+| `PROMPT_GALLERY_PASSWORD` | 否 | 空 | 提示词广场私密模式密码；为空时私密模式可直接开启 |
 
-For example, keep a public URL in browser-side model settings while routing server-side requests to a Docker network service:
+> `.env` 修改后大部分运行时配置**实时生效**（任务并发、限流、队列容量、接单开关、Base URL 出站改写、广场模式、图片模型 Key 指引），无需重启；`PORT`、`HOSTNAME`、`NODE_ENV` 这类启动级配置仍需重启。
+
+### 视频协议配置
+
+视频工作台支持 `new-api`、OpenAI Videos（Sora）和 `xai` 三种协议。协议的时长、尺寸、宽高比、清晰度、参考图数量以及设置页默认 Base URL/模型 ID，统一定义在 `backend/video-protocol-capabilities.json`。后端在 `/api/flyreq/config` 下发合并后的 `videoProtocols`，前端据此显示控件，后端再使用同一配置校验请求。
+
+默认视频模型使用 `FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL=openai` 和 `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID=sora-2`。可选协议值如下：
+
+- `new-api`：New API 通用视频协议，创建端点为 `/v1/video/generations`。
+- `openai`：OpenAI Videos（Sora）协议，创建端点为 `/v1/videos`，这是默认值。
+- `xai`：xAI Videos 协议，创建端点为 `/v1/videos/generations`。
+
+切换协议时必须同时配置与上游匹配的 `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` 和 `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID`。
+
+| 协议 | 官方核对结果 | 配置约束来源 |
+| --- | --- | --- |
+| [New API 通用视频](https://www.newapi.ai/zh/docs/api/ai-model/videos/createvideogeneration) | 使用 `POST /v1/video/generations`、`GET /v1/video/generations/{task_id}`，请求字段为 `model`、`prompt`、`image`、`duration`、`width`、`height` | 官方未定义跨上游模型统一的时长和尺寸上限，因此配置标记为 `workspace-default`；内置 1-60 秒和尺寸列表是工作台默认边界，可用环境变量覆盖 |
+| [OpenAI Videos（Sora）](https://developers.openai.com/api/docs/guides/video-generation) | 使用 `POST /v1/videos`、`GET /v1/videos/{video_id}`、`GET /v1/videos/{video_id}/content`；支持 Sora 官方时长/尺寸，参考图采用 `input_reference` | `official`；后端额外校验 JPEG/PNG/WebP 参考图的像素尺寸必须与 `size` 完全一致 |
+| [xAI Videos](https://docs.x.ai/developers/model-capabilities/video/generation) | 使用 `POST /v1/videos/generations`、`GET /v1/videos/{request_id}`；时长 1-15 秒，支持官方宽高比与 480p/720p，1.5 模型图生视频支持 1080p | `official`；图生视频的 `image` 按官方要求发送 URL、data URI 或 `file_id` 字符串，不包装为对象 |
+
+部署差异必须通过 `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` 配置。例如，把 xAI 的页面预设时长替换为 3、6、9 秒：
 
 ```env
-FLYREQ_BASE_URL_REWRITE_MAP={"https://flyreq.com":"http://new-api:3000"}
+FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES={"protocols":{"xai":{"parameters":{"duration":{"presets":[3,6,9]}}}}}
 ```
 
-This mapping changes only outbound server requests. It never rewrites the user's stored model configuration.
+覆盖遵循 JSON Merge Patch：对象递归合并，数组整体替换，`null` 删除字段。配置版本、未知协议和不完整能力会在服务端被拒绝。注册表 v1 中原来的 `openai` 视频模型会迁移为隐藏的 `legacy-openai-video`，继续沿用旧 `/v1/videos/generations` 行为；在设置页明确选择新协议后，模型才切换到对应官方端点。
 
-Most runtime settings in `.env` take effect without a restart, including concurrency, rate limits, queue capacity, accepting-new-tasks, outbound base-URL rewrites, Prompt Gallery settings, and the image-model key guide. Restart after changing startup settings such as `PORT`, `HOSTNAME`, or `NODE_ENV`.
+---
 
-### Video Protocol Configuration
+## 📡 API 速览
 
-The default video model uses `FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL=openai` and `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID=sora-2`. Supported values are:
+后端暴露在 `/api/flyreq/*` 路径下，前端在同源调用。
 
-- `new-api`: New API generic video protocol, using `POST /v1/video/generations`.
-- `openai`: OpenAI Videos (Sora), using `POST /v1/videos`. This is the default.
-- `xai`: xAI Videos, using `POST /v1/videos/generations`.
-
-When changing the protocol, also configure `FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL` and `FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID` for that upstream service. Protocol capabilities are defined in `backend/video-protocol-capabilities.json` and can be overridden through `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES`.
-
-## Task System
-
-- Jobs enter a server-side queue with configurable concurrency and rate limits.
-- Browsers receive job and queue changes through WebSocket, reconnect automatically, and fall back to HTTP polling after repeated failures.
-- Generated files are stored on disk and served from `/api/flyreq/images/:taskId/:index`.
-- Jobs expire after 12 hours and are cleaned up automatically.
-- A restart marks incomplete jobs as failed and removes their partial output, preventing orphaned tasks.
-
-## Engineering and UX
-
-- Installable PWA through `next-pwa`.
-- Responsive desktop, tablet, and mobile layouts.
-- Light and dark themes plus wide and narrow workspace layouts.
-- Task history persisted with IndexedDB and localStorage.
-- One-click backup and restore through JSZip, including partial recovery when older settings are incompatible.
-- Virtualized lazy loading for historical images through `@tanstack/react-virtual`.
-- Random images, toast notifications, and confirmation dialogs.
-
-## Project Structure
-
-```text
-flyreq-image-studio/
-├── frontend/                 # Next.js frontend (React 19 + TypeScript)
-│   ├── src/
-│   │   ├── app/              # Root layout and pages
-│   │   ├── components/       # Feature components and shadcn/ui primitives
-│   │   │   ├── workspace/    # Workspace shell, tabs, header, and results
-│   │   │   ├── agent/        # Agent-mode components
-│   │   │   └── ui/           # UI primitives
-│   │   ├── hooks/            # Queue, Agent, GIF, and other hooks
-│   │   ├── lib/              # Client utilities, API clients, WebSocket, backup
-│   │   └── test/             # Vitest configuration and tests
-│   ├── public/               # PWA icons and static assets
-│   ├── next.config.ts        # Static export and next-pwa configuration
-│   ├── package.json
-│   └── vitest.config.ts
-├── backend/
-│   ├── server.js             # Node server: HTTP, WS, SQLite, and task queue
-│   ├── prompts.json          # Prompt Gallery content
-│   ├── blacklist.json        # Sensitive-word list
-│   ├── .env.example
-│   └── package.json
-├── scripts/
-│   ├── pack.js               # Build and package out.zip
-│   └── generate-icons.js     # Generate PWA icons
-├── package.json              # npm workspaces root
-├── LICENSE                   # AGPL-3.0 license
-└── README.md
-```
-
-Production builds are emitted to `frontend/out/` and served statically by `backend/server.js`.
-
-## API
-
-| Method | Path | Purpose |
+| 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| `POST` | `/api/flyreq/tasks/batch` | Submit multiple independent image tasks; returns ordered `taskIds`. |
-| `POST` | `/api/flyreq/tasks` | Submit one image-generation task; returns `taskId` with HTTP 202. |
-| `GET` | `/api/flyreq/tasks/:taskId` | Read task status and results. |
-| `POST` | `/api/flyreq/tasks/:taskId/ack` | Extend an existing task's retrieval TTL by two minutes. |
-| `GET` | `/api/flyreq/queue-status` | Read active, queued, and accepting status. |
-| `GET` | `/api/flyreq/prompts` | Read Prompt Gallery content. |
-| `GET` | `/api/flyreq/blacklist` | Read the sensitive-word list. |
-| `GET` | `/api/flyreq/config` | Read browser runtime configuration. |
-| `GET` | `/api/flyreq/manifest.webmanifest` | Read the runtime PWA manifest. |
-| `GET` | `/api/flyreq/images/:taskId/:index/:subIndex` | Read a generated image; omit `subIndex` for image 0. |
-| `WS` | `/api/flyreq/ws` | Subscribe to task and queue updates. |
+| `POST` | `/api/flyreq/tasks/batch` | 批量创建独立任务，按图片序号返回 `taskIds`（202） |
+| `POST` | `/api/flyreq/tasks` | 创建任务，返回 `{ taskId }`（202） |
+| `GET` | `/api/flyreq/tasks/:id` | 查询任务状态与结果 |
+| `POST` | `/api/flyreq/tasks/:id/ack` | 续期：把 TTL 延长 2 分钟 |
+| `GET` | `/api/flyreq/queue-status` | 当前并发 / 排队 / 接收状态 |
+| `GET` | `/api/flyreq/prompts` | 提示词广场内容 |
+| `GET` | `/api/flyreq/blacklist` | 敏感词列表 |
+| `GET` | `/api/flyreq/config` | 前端配置（如 `promptGalleryMode`） |
+| `GET` | `/api/flyreq/manifest.webmanifest` | 运行时 PWA manifest |
+| `GET` | `/api/flyreq/images/:taskId/:index/:subIndex` | 任务产物图片；省略 `subIndex` 时读取第 0 张 |
+| `WS` | `/api/flyreq/ws` | 实时任务 / 队列订阅 |
 
-### Task statuses
+### 任务状态
 
-- `queued`: Waiting for scheduling.
-- `processing`: Calling the upstream API.
-- `completed`: Succeeded; `result.images` contains result URLs.
-- `failed`: Failed; see `error`.
-- `expired`: Exceeded the task TTL.
+- `排队中`：等待调度
+- `processing`：正在调用上游 API
+- `completed`：成功，`result.images` 包含产物链接
+- `failed`：失败，详见 `error`
+- `expired`：超过 TTL
 
-## Troubleshooting
+---
 
-**Why not use `next start` in production?**
+## ❓ 常见问题
 
-The project uses `output: 'export'`, producing a static `frontend/out/` directory. `server.js` hosts both the static files and task API, so `next start` is not used.
+**为什么生产环境不用 `next start`？**
+项目使用 `output: 'export'`，构建产物是纯静态 `out/`。`server.js` 同时托管静态文件 + 任务 API，不再依赖 `next start`。
 
-**Can I deploy only `frontend/out/`?**
+**只部署 `out/` 能用吗？**
+UI 可以打开，但任务提交、Agent、历史同步全部依赖 `/api/flyreq/*`，必须运行 `server.js`。
 
-The UI opens, but task submission, Agent, and history synchronization require `/api/flyreq/*`; run `server.js` as well.
+**数据库需要单独备份吗？**
+首次部署不需要，服务启动会自建。任务数据要保留就备份 `flyreq-tasks.sqlite`（含 WAL/SHM）以及 `flyreq-images/`。重启后残留任务会被自动标记为失败并清理产物。
 
-**Does the database need a separate backup?**
-
-The service creates it automatically. To retain task data, back up `flyreq-tasks.sqlite` with its WAL/SHM files and `flyreq-images/`. A restart marks remaining active tasks as failed and cleans up their output.
-
-**How do I temporarily stop accepting new tasks without stopping the service?**
-
-Set the following in `.env`:
+**如何临时停止接收新任务（不停服务）？**
+编辑 `.env`：
 
 ```env
 FLYREQ_ACCEPT_NEW_TASKS=false
 ```
 
-It takes effect after saving. Wait for in-flight tasks before restarting for an upgrade. Set it to `true` or leave it empty to accept tasks again.
+保存即生效。等待在飞任务完成后即可重启升级。再次开启设为 `true` 或留空。
 
-**When do tasks expire?**
+**任务多久会过期？**
+创建后 12 小时；前端在拿到结果后会调用 `/ack` 续期 2 分钟，给下载留时间。超过 TTL 服务端删除数据库记录与产物图片。
 
-Tasks expire 12 hours after creation. When the frontend receives a result, it calls `/ack` to extend retrieval by two minutes. The server removes the database record and result images after expiry.
-
-**Why can an upstream console show success while FlyReq Image reports 504?**
-
-Cloudflare, Nginx, or another gateway can close a long-running response before the upstream image job finishes. Prefer a Docker-internal or DNS-only upstream address, configure `FLYREQ_BASE_URL_REWRITE_MAP`, and enable streaming image requests for compatible OpenAI Images endpoints. The original upstream error is kept in the task failure message.
+**New API 已经生成成功，为什么前端仍然显示 504？**
+如果 FlyReq Image 后端通过 Cloudflare 橙云域名访问 New API，长时间无响应的图片生成请求可能被 Cloudflare / Nginx 网关提前截断，New API 控制台仍可能显示上游任务成功。推荐优先让 FlyReq Image 后端使用 New API 的 Docker 内网地址或灰云域名；同时可在对应图片模型中开启“流式图片请求”，让兼容接口通过 `stream=true` 持续返回事件，降低 504 概率。上游不支持该参数时，任务会直接失败并保留错误信息。
 
 ---
 
-## Acknowledgements
+## 🙏 致谢
 
-The infinite-canvas workspace is built on [infinite-canvas](https://github.com/basketikun/infinite-canvas). Thanks to its author, [basketikun](https://github.com/basketikun), for the open-source contribution, and to [tianjiangqiji](https://github.com/tianjiangqiji/nova-image-studio) for the open-source UI.
+本项目的无限画布工作区功能基于 [infinite-canvas](https://github.com/basketikun/infinite-canvas) 项目开发，感谢原作者 [basketikun](https://github.com/basketikun) 的开源贡献。感谢[tianjiangqiji](https://github.com/tianjiangqiji/nova-image-studio)的开源UI
 
-Thanks to the [Linux.do](https://linux.do/) community for its support.
+感谢 [Linux.do](https://linux.do/) 社区的支持。
+
 
 ---
 
@@ -687,8 +766,24 @@ Thanks to the [Linux.do](https://linux.do/) community for its support.
 
 ---
 
-## License
 
-Released under the [AGPL-3.0](LICENSE) license.
+## 📄 许可证
 
-For the complete Chinese deployment guide, environment-variable reference, and operational FAQ, see [README.zh-CN.md](./README.zh-CN.md).
+本项目采用 [GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）开源许可证。
+
+这意味着：
+
+- ✅ 你可以自由使用、修改和分发本软件
+- ✅ 你可以将本软件用于商业用途
+- ⚠️ 如果你修改了本软件并通过网络提供服务，你必须公开修改后的源代码
+- ⚠️ 基于本软件的衍生作品必须使用相同的 AGPL-3.0 许可证
+
+详细条款请参阅 [LICENSE](LICENSE) 文件。
+
+---
+
+<div align="center">
+
+**[⬆ 回到顶部](#flyreq-image-studio)**
+
+</div>

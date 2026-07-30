@@ -13,6 +13,7 @@ export interface StoredVideoJob {
   prompt: string;
   modelId: string;
   modelName?: string;
+  apiModelId?: string;
   protocol?: VideoProtocol;
   resolution: number;
   videoSize: string;

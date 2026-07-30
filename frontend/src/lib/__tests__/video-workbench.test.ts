@@ -24,6 +24,7 @@ import {
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const serverSource = fs.readFileSync(path.resolve(testDir, '../../../../backend/server.js'), 'utf8');
 const videoTaskClientSource = fs.readFileSync(path.resolve(testDir, '../video-task-client.ts'), 'utf8');
+const videoWorkspaceSource = fs.readFileSync(path.resolve(testDir, '../../components/VideoGenerationWorkspace.tsx'), 'utf8');
 
 describe('视频模型注册表与工作台配置', () => {
   afterEach(() => {
@@ -226,6 +227,7 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain('durationMs,');
     expect(serverSource).toContain("sendJson(res, 202, { ...task, taskId })");
     expect(videoTaskClientSource).toContain("formData.set('modelName', input.model.name)");
+    expect(videoWorkspaceSource).toContain('apiModelId: getResolvedVideoModelId(selectedModel)');
     expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED');
     expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS');
     expect(serverSource).not.toContain('logVideoUpstreamFailure');

@@ -286,7 +286,7 @@ describe('VideoGenerationWorkspace', () => {
     await waitFor(() => expect(restoreVideoBlobUrl).toHaveBeenCalledOnce());
   });
 
-  it('在视频任务卡片展示服务端任务 ID、模型名称、清晰度和总耗时', () => {
+  it('在视频任务卡片展示服务端任务 ID、模型名称、模型 ID、清晰度和总耗时', () => {
     localStorage.setItem('flyreq-video-jobs', JSON.stringify([{
       id: 'local-video-job',
       serverTaskId: 'server-traceable-task-id',
@@ -294,6 +294,7 @@ describe('VideoGenerationWorkspace', () => {
       prompt: 'Traceable video task',
       modelId: 'video-test',
       modelName: 'Video Test',
+      apiModelId: 'sora-2-api-model',
       protocol: 'openai',
       resolution: 1080,
       videoSize: '1920x1080',
@@ -314,6 +315,7 @@ describe('VideoGenerationWorkspace', () => {
     const taskCard = screen.getByText('server-traceable-task-id').closest('article');
     expect(taskCard).not.toBeNull();
     expect(within(taskCard!).getByText('Video Test')).toBeInTheDocument();
+    expect(within(taskCard!).getByText('sora-2-api-model')).toBeInTheDocument();
     expect(within(taskCard!).getByText('1080p')).toBeInTheDocument();
     expect(within(taskCard!).getByText('1m 5s')).toBeInTheDocument();
   });

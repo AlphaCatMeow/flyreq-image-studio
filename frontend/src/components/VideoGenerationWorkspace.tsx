@@ -226,6 +226,18 @@ function formatVideoJobDuration(durationMs: number | undefined, durationUpdatedA
 }
 
 /**
+ * 读取视频任务实际发送给上游的模型 ID，并兼容升级前保存的历史任务。
+ * @param job 当前视频任务记录。
+ * @param models 设置注册表中仍可用的视频模型配置。
+ * @returns 任务保存的 API 模型 ID；旧任务尝试从关联配置解析，无法解析时返回占位符。
+ */
+function getVideoJobApiModelId(job: StoredVideoJob, models: VideoModelConfig[]): string {
+  if (job.apiModelId?.trim()) return job.apiModelId.trim();
+  const configuredModel = models.find(model => model.id === job.modelId);
+  return configuredModel ? getResolvedVideoModelId(configuredModel) : '--';
+}
+
+/**
  * 渲染完整的视频生成工作台和任务历史。
  * @param props 宽屏状态、设置入口和全局提示回调。
  * @returns 响应式视频工作台。
@@ -566,6 +578,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
       prompt: prompt.trim(),
       modelId: selectedModel.id,
       modelName: selectedModel.name,
+      apiModelId: getResolvedVideoModelId(selectedModel),
       protocol: selectedModel.protocol,
       resolution: activeProtocolResolution,
       videoSize: activeVideoSize,
@@ -928,6 +941,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.resolution')}</dt><dd className="font-medium text-foreground">{getVideoResolutionLabel(job.resolution)}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.totalDuration')}</dt><dd className="font-medium text-foreground">{formatVideoJobDuration(job.durationMs, job.durationUpdatedAt, job.status === '排队中' || job.status === 'processing', job.createdAt, job.completedAt, durationNowMs, locale)}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.seconds')}</dt><dd className="flex items-center gap-1 font-medium text-foreground"><Clock3 className="size-3" />{job.seconds}s</dd></div>
+                <div className="col-span-2 min-w-0 sm:col-span-4"><dt className="text-muted-foreground">{t('video.modelId')}</dt><dd className="select-all break-all font-mono text-[11px] text-foreground">{getVideoJobApiModelId(job, models)}</dd></div>
                 <div className="col-span-2 min-w-0 sm:col-span-4"><dt className="text-muted-foreground">{t('video.taskId')}</dt><dd className="select-all break-all font-mono text-[11px] text-foreground">{job.serverTaskId || t('video.taskIdPending')}</dd></div>
               </dl>
               <div className="flex flex-wrap gap-2 text-xs text-muted-foreground"><span>{job.videoSize}</span>{job.protocol === 'xai' && job.aspectRatio && <span>{job.aspectRatio}</span>}<span>{t('video.createdAt', { time: formatJobTime(job.createdAt, locale) })}</span></div>
