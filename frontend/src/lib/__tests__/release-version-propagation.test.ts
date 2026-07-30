@@ -21,4 +21,11 @@ describe('发布版本到 UI 的传递', () => {
     expect(nextConfig).not.toContain(legacyVersionEnv);
     expect(brandProvider).not.toContain(legacyVersionEnv);
   });
+
+  it('在前端构建前复制共享的视频协议能力配置', () => {
+    const capabilityCopy = 'COPY backend/video-protocol-capabilities.json ./backend/video-protocol-capabilities.json';
+    const frontendBuild = 'RUN cd frontend && npm ci && npm run build';
+    expect(dockerfile).toContain(capabilityCopy);
+    expect(dockerfile.indexOf(capabilityCopy)).toBeLessThan(dockerfile.indexOf(frontendBuild));
+  });
 });
