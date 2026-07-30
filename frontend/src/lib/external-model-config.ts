@@ -7,6 +7,8 @@ import {
   type ProviderProtocol,
   type TextModelConfig,
   type VideoModelConfig,
+  type PublicVideoProtocol,
+  type VideoProtocol,
 } from '@/lib/flyreq-models';
 
 interface ExternalModelConfigBase {
@@ -36,7 +38,7 @@ export type ExternalTextModelConfig = ExternalModelConfigBase & {
 
 export type ExternalVideoModelConfig = ExternalModelConfigBase & {
   type: 'video';
-  protocol?: 'openai';
+  protocol?: VideoProtocol;
 };
 
 export type ExternalModelConfig = ExternalImageModelConfig | ExternalTextModelConfig | ExternalVideoModelConfig;
@@ -73,6 +75,27 @@ function normalizePreset(value: string | null): BuiltinImagePresetId | undefined
 
 function normalizeProvider(value: string | null): ProviderProtocol | undefined {
   return value === 'openai' || value === 'google' ? value : undefined;
+}
+
+/**
+ * 将外链协议值规范化为受支持的视频协议。
+ * @param value 外链中的协议字符串。
+ * @returns 有效视频协议；无法识别时返回 undefined。
+ */
+function normalizeVideoProtocol(value: string | null): PublicVideoProtocol | undefined {
+  return value === 'new-api' || value === 'openai' || value === 'xai' ? value : undefined;
+}
+
+/**
+ * 区分新协议字段与历史 provider 字段，避免旧视频外链被静默改为 Sora 端点。
+ * @param explicitProtocol 新版外链显式提供的 protocol 字段。
+ * @param legacyProvider 旧版外链提供的 provider 字段。
+ * @returns 新版公开视频协议或旧版兼容协议；字段非法时返回 undefined。
+ */
+function resolveExternalVideoProtocol(explicitProtocol: string | null, legacyProvider: string | null): VideoProtocol | undefined {
+  if (explicitProtocol) return normalizeVideoProtocol(explicitProtocol);
+  if (!legacyProvider || legacyProvider === 'openai') return 'legacy-openai-video';
+  return normalizeVideoProtocol(legacyProvider);
 }
 
 function normalizeOutputSize(value: string | null): ImageOutputSize | undefined {
@@ -116,7 +139,9 @@ function parseProviderJson(value: string | null): Record<string, unknown> | null
 
 function normalizeProviderPayload(payload: Record<string, unknown>): ExternalModelConfig | null {
   const type = readString(payload.type) || 'image';
-  const protocol = readString(payload.provider) || readString(payload.protocol);
+  const provider = readString(payload.provider);
+  const explicitProtocol = readString(payload.protocol);
+  const protocol = provider || explicitProtocol;
   const common = {
     modelKey: readString(payload.modelKey),
     name: readString(payload.name),
@@ -135,9 +160,9 @@ function normalizeProviderPayload(payload: Record<string, unknown>): ExternalMod
   }
 
   if (type === 'video') {
-    const normalizedProtocol = normalizeProvider(protocol || null);
-    if (normalizedProtocol && normalizedProtocol !== 'openai') return null;
-    return { type: 'video', ...common, protocol: 'openai' };
+    const normalizedProtocol = resolveExternalVideoProtocol(explicitProtocol || null, provider || null);
+    if (!normalizedProtocol) return null;
+    return { type: 'video', ...common, protocol: normalizedProtocol };
   }
 
   if (type !== 'image') return null;
@@ -174,8 +199,9 @@ export function parseExternalModelConfig(url: URL): ExternalModelConfig | null {
     return { type: 'text', ...common, protocol, note: readTrimmed(url.searchParams, 'note') };
   }
   if (type === 'video') {
-    if (protocol && protocol !== 'openai') return null;
-    return { type: 'video', ...common, protocol: 'openai' };
+    const videoProtocol = resolveExternalVideoProtocol(url.searchParams.get('protocol'), url.searchParams.get('provider'));
+    if (!videoProtocol) return null;
+    return { type: 'video', ...common, protocol: videoProtocol };
   }
 
   const maxRefImagesRaw = Number(url.searchParams.get('maxRefImages'));
@@ -253,11 +279,13 @@ export function getExternalVideoModelMatch(models: VideoModelConfig[], config: E
     const byKey = models.find(model => model.id === config.modelKey);
     if (byKey) return byKey;
   }
+  const protocol = config.protocol || 'legacy-openai-video';
   const name = config.name?.trim().toLowerCase();
   const modelId = config.modelId?.trim().toLowerCase();
   const baseUrl = config.baseUrl?.trim().replace(/\/+$/, '').toLowerCase();
   if (!name || !modelId || !baseUrl) return undefined;
   return models.find(model => model.name.trim().toLowerCase() === name
     && getResolvedVideoModelId(model).toLowerCase() === modelId
-    && model.baseUrl.trim().replace(/\/+$/, '').toLowerCase() === baseUrl);
+    && model.baseUrl.trim().replace(/\/+$/, '').toLowerCase() === baseUrl
+    && model.protocol === protocol);
 }

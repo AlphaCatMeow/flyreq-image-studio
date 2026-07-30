@@ -1,24 +1,30 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   applyDeploymentDefaultVideoModel,
   getCompleteVideoModels,
   getResolvedVideoModelId,
   loadRegistry,
   saveRegistry,
+  updateRegistryDefaults,
 } from '@/lib/flyreq-models';
 import {
   applyVideoWorkspaceConfig,
+  getVideoProtocolConfig,
   getVideoWorkspaceConfig,
+  getVideoProtocolDurations,
   isValidVideoDuration,
+  isValidVideoProtocolDuration,
   isValidVideoResolution,
   isValidVideoSize,
 } from '@/lib/video-config';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const serverSource = fs.readFileSync(path.resolve(testDir, '../../../../backend/server.js'), 'utf8');
+const videoTaskClientSource = fs.readFileSync(path.resolve(testDir, '../video-task-client.ts'), 'utf8');
+const videoWorkspaceSource = fs.readFileSync(path.resolve(testDir, '../../components/VideoGenerationWorkspace.tsx'), 'utf8');
 
 describe('视频模型注册表与工作台配置', () => {
   afterEach(() => {
@@ -27,12 +33,33 @@ describe('视频模型注册表与工作台配置', () => {
     applyVideoWorkspaceConfig();
   });
 
-  it('为旧注册表迁移默认视频模型和默认工作流字段', () => {
+  it('为缺少视频模型的旧注册表补充 OpenAI 默认模型和工作流字段', () => {
     localStorage.setItem('flyreq-model-registry', JSON.stringify({ imageModels: [], textModels: [], defaults: {} }));
     const registry = loadRegistry();
-    expect(registry.videoModels[0]).toEqual(expect.objectContaining({ modelId: '', usesPresetModelId: true, presetModelId: 'grok-imagine-video', protocol: 'openai' }));
-    expect(getResolvedVideoModelId(registry.videoModels[0])).toBe('grok-imagine-video');
+    expect(registry.schemaVersion).toBe(2);
+    expect(registry.videoModels[0]).toEqual(expect.objectContaining({ modelId: '', usesPresetModelId: true, presetModelId: 'sora-2', protocol: 'openai' }));
+    expect(getResolvedVideoModelId(registry.videoModels[0])).toBe('sora-2');
     expect(registry.defaults).toHaveProperty('videoGeneration');
+  });
+
+  it('把注册表 v1 的 openai 视频模型迁移为隐藏的旧兼容协议', () => {
+    localStorage.setItem('flyreq-model-registry', JSON.stringify({
+      imageModels: [],
+      textModels: [],
+      videoModels: [{
+        id: 'legacy-video',
+        protocol: 'openai',
+        name: 'Legacy Video',
+        modelId: 'old-model',
+        apiKey: 'key',
+        baseUrl: 'https://video.example.com',
+      }],
+      defaults: { videoGeneration: 'legacy-video' },
+    }));
+
+    const registry = loadRegistry();
+    expect(registry.schemaVersion).toBe(2);
+    expect(registry.videoModels[0].protocol).toBe('legacy-openai-video');
   });
 
   it('应用部署视频模型且仅在 API Key 完整后对工作台可用', () => {
@@ -82,22 +109,67 @@ describe('视频模型注册表与工作台配置', () => {
     expect(reloaded.defaults.videoGeneration).toBe('');
   });
 
+  it('工作台选择模型后同步并广播对应的设置默认模型', () => {
+    const registry = loadRegistry();
+    registry.imageModels[0].apiKey = 'image-key';
+    registry.videoModels[0].apiKey = 'video-key';
+    registry.imageModels.push({ ...registry.imageModels[0], id: 'image-second', name: 'Image Second' });
+    registry.videoModels.push({ ...registry.videoModels[0], id: 'video-second', name: 'Video Second' });
+    registry.textModels = [
+      { id: 'text-first', protocol: 'openai', name: 'Text First', modelId: 'gpt-5.4-mini', apiKey: 'text-key', baseUrl: 'https://text.example.com' },
+      { id: 'text-second', protocol: 'openai', name: 'Text Second', modelId: 'gpt-5.4-mini', apiKey: 'text-key', baseUrl: 'https://text.example.com' },
+    ];
+    saveRegistry(registry);
+    const listener = vi.fn();
+    window.addEventListener('flyreq-model-registry-updated', listener);
+
+    const defaults = updateRegistryDefaults({
+      textToImage: 'image-second',
+      videoGeneration: 'video-second',
+      reversePrompt: 'text-second',
+    });
+
+    expect(defaults).toEqual(expect.objectContaining({
+      textToImage: 'image-second',
+      videoGeneration: 'video-second',
+      reversePrompt: 'text-second',
+    }));
+    expect(listener).toHaveBeenCalledOnce();
+    window.removeEventListener('flyreq-model-registry-updated', listener);
+  });
+
   it('规范化参数数组并执行精确的自定义值边界校验', () => {
     applyVideoWorkspaceConfig({ maxRefImages: 7, resolutions: [1080, 720], sizes: ['1920x1080', 'bad'], durations: [5, 8] });
     expect(getVideoWorkspaceConfig()).toEqual(expect.objectContaining({ maxRefImages: 7, resolutions: [1080, 720], sizes: ['1920x1080'], durations: [5, 8] }));
     expect(isValidVideoResolution(144)).toBe(true);
     expect(isValidVideoResolution(4321)).toBe(false);
     expect(isValidVideoSize('1280x720')).toBe(true);
-    expect(isValidVideoSize('1279x720')).toBe(false);
+    expect(isValidVideoSize('63x720')).toBe(false);
     expect(isValidVideoDuration(60)).toBe(true);
     expect(isValidVideoDuration(61)).toBe(false);
+    const protocols = getVideoProtocolConfig().protocols;
+    expect(getVideoProtocolDurations(protocols.openai)).toEqual([4, 8, 12, 16, 20]);
+    expect(getVideoProtocolDurations(protocols.xai)).toEqual([5, 10, 15]);
+    expect(isValidVideoProtocolDuration(protocols.openai, 6)).toBe(true);
+    expect(isValidVideoProtocolDuration(protocols.openai, 61)).toBe(false);
+    expect(isValidVideoProtocolDuration(protocols.xai, 15)).toBe(true);
+  });
+
+  it('提供视频工作台的默认附件上限和 4K 清晰度', () => {
+    applyVideoWorkspaceConfig();
+    expect(getVideoWorkspaceConfig()).toEqual(expect.objectContaining({
+      maxRefImages: 9,
+      maxRefVideos: 3,
+      maxRefAudios: 3,
+      resolutions: [720, 480, 1080, 2160],
+    }));
   });
 });
 
 describe('后端视频任务契约', () => {
   it('包含独立队列、multipart 上传、上游创建轮询和 Range 播放', () => {
     expect(serverSource).toContain("Busboy({");
-    expect(serverSource).toContain("'/v1/videos/generations'");
+    expect(serverSource).toContain("require('./video-protocols')");
     expect(serverSource).toContain('function drainVideoQueue()');
     expect(serverSource).toContain("apiPathname === '/api/flyreq/video-tasks'");
     expect(serverSource).toContain('cancelVideoTask(taskId)');
@@ -112,8 +184,12 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain('FLYREQ_VIDEO_MAX_REF_IMAGES');
     expect(serverSource).toContain('FLYREQ_VIDEO_RESOLUTIONS');
     expect(serverSource).toContain('defaultVideoModel: resolveDefaultVideoModelConfig(env)');
+    expect(serverSource).toContain("protocol: 'openai'");
+    expect(serverSource).toContain("modelId: 'sora-2'");
     expect(serverSource).toContain('videoWorkspace: resolveVideoWorkspaceConfig(env)');
-    expect(serverSource).toContain("body.append('reference_images'");
+    expect(serverSource).toContain('videoProtocols: resolveVideoProtocolConfig(env)');
+    expect(serverSource).toContain('createVideoRequest(request.protocol');
+    expect(serverSource).toContain('validateVideoProtocolRequest(resolveVideoProtocolConfig(getRuntimeEnv())');
   });
 
   it('按附件类型限制流式缓存，且全局文件限制包含参考图片', () => {
@@ -135,12 +211,26 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain('start === undefined || end === undefined');
   });
 
-  it('记录视频上游原始错误响应并提取结构化错误消息', () => {
-    expect(serverSource).toContain('function logVideoUpstreamFailure(stage, url, response, responseText, context = {})');
-    expect(serverSource).toContain("console.error('[video-upstream] 上游响应异常");
-    expect(serverSource).toContain("logVideoUpstreamFailure('create'");
-    expect(serverSource).toContain("logVideoUpstreamFailure('poll'");
-    expect(serverSource).toContain("logVideoUpstreamFailure('download'");
+  it('记录视频上游请求与响应并提取结构化错误消息', () => {
+    expect(serverSource).toContain("require('./video-upstream-logger')");
+    expect(serverSource).toContain("logVideoUpstreamRequest('create'");
+    expect(serverSource).toContain("logVideoUpstreamRequest('poll'");
+    expect(serverSource).toContain("logVideoUpstreamRequest('download'");
+    expect(serverSource).toContain("logVideoUpstreamResponse('create'");
+    expect(serverSource).toContain("logVideoUpstreamResponse('poll'");
+    expect(serverSource).toContain("logVideoUpstreamResponse('download'");
+    expect(serverSource).toContain('taskId: trace.taskId');
+    expect(serverSource).toContain('modelName: trace.modelName');
+    expect(serverSource).toContain('resolution: formatVideoResolution(trace.resolution)');
+    expect(serverSource).toContain('totalDurationMs: Math.max(0, Date.now() - startedAtMs)');
+    expect(serverSource).toContain('logVideoTaskSummary({');
+    expect(serverSource).toContain('durationMs,');
+    expect(serverSource).toContain("sendJson(res, 202, { ...task, taskId })");
+    expect(videoTaskClientSource).toContain("formData.set('modelName', input.model.name)");
+    expect(videoWorkspaceSource).toContain('apiModelId: getResolvedVideoModelId(selectedModel)');
+    expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED');
+    expect(serverSource).toContain('FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS');
+    expect(serverSource).not.toContain('logVideoUpstreamFailure');
     expect(serverSource).toContain('const extracted = getMessageFromPayload(payload)');
     expect(serverSource).not.toContain("${data?.error || responseText || '未返回任务 ID'}");
   });

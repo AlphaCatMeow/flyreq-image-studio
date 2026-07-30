@@ -9,7 +9,7 @@ import {
   type DeploymentDefaultImageModelConfig,
   type DeploymentDefaultVideoModelConfig,
 } from '@/lib/flyreq-models';
-import { applyVideoWorkspaceConfig, type VideoWorkspaceConfig } from '@/lib/video-config';
+import { applyVideoProtocolConfig, applyVideoWorkspaceConfig, type VideoProtocolConfig, type VideoWorkspaceConfig } from '@/lib/video-config';
 
 // 1 = 常驻（直接显示） 2 = 私密（需密码） 3 = 关闭（完全隐藏）
 export type PromptGalleryMode = '1' | '2' | '3';
@@ -35,12 +35,14 @@ export function usePromptGalleryConfig() {
         defaultImageModel?: DeploymentDefaultImageModelConfig;
         defaultVideoModel?: DeploymentDefaultVideoModelConfig;
         videoWorkspace?: VideoWorkspaceConfig;
+        videoProtocols?: VideoProtocolConfig;
       }) => {
         if (cancelled) return;
         applyBuiltinImagePresetModelIds(data.imagePresetModelIds);
         applyDeploymentDefaultImageModel(data.defaultImageModel);
         applyDeploymentDefaultVideoModel(data.defaultVideoModel);
         applyVideoWorkspaceConfig(data.videoWorkspace);
+        applyVideoProtocolConfig(data.videoProtocols);
         const raw = data.promptGalleryMode;
         setMode(raw === '1' || raw === '3' ? raw : '2');
         setPasswordEnabled(Boolean(data.promptGalleryPasswordEnabled));
@@ -50,6 +52,7 @@ export function usePromptGalleryConfig() {
         applyDeploymentDefaultImageModel();
         applyDeploymentDefaultVideoModel();
         applyVideoWorkspaceConfig();
+        applyVideoProtocolConfig();
       })
       .finally(() => {
         if (!cancelled) setReady(true);

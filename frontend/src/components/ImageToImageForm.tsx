@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import { getDefaultModelId, MODEL_OPTIONS, MODEL_IMAGE_LIMITS, type ModelId } from '@/lib/gemini-config';
+import { updateRegistryDefaults } from '@/lib/flyreq-models';
 import {
   getAspectRatioOptions,
   getCustomSizeMaxSide,
@@ -207,6 +208,7 @@ export function ImageToImageForm({
 
   const handleModelChange = (newModel: ModelId) => {
     setModel(newModel);
+    updateRegistryDefaults({ imageToImage: newModel });
     setGptImageAdvancedParams(prev => getGptImageAdvancedParamsForModel(newModel, prev));
     const sizeOptions = getSizeOptions(newModel).filter(option => !option.disabled);
     const nextOutputSize = outputSize === 'auto' && supportsAutoLayout(newModel)

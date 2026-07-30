@@ -53,6 +53,8 @@ import {
   type ProviderProtocol,
   type TextModelConfig,
   type VideoModelConfig,
+  type PublicVideoProtocol,
+  type VideoProtocol,
 } from '@/lib/flyreq-models';
 import {
   getExternalImageModelMatch,
@@ -65,17 +67,40 @@ import {
 } from '@/lib/external-model-config';
 import { syncDynamicModelExports } from '@/lib/gemini-config';
 import { exportAllData, importAllData, downloadBlob, generateBackupFilename, type BackupProgress as BackupProgressType } from '@/lib/backup-utils';
-import { checkModelsAvailability, type ModelStatus } from '@/lib/flyreq-task-client';
+import { checkModelsAvailability, fetchRemoteModels, type ModelStatus, type RemoteModelOption } from '@/lib/flyreq-task-client';
 import { hasConfiguredImageModel, isPromptOptimizeEnabled, setPromptOptimizeEnabled } from '@/lib/settings-storage';
 import { saveFirstImageModelAsFormDefault } from '@/lib/form-settings';
 import { notifyImageModelDefaultUpdated } from '@/hooks/useImageModelDefaultRefresh';
 import { BA_RANDOM_URL, BING_WALLPAPER_URL, IMAGE_MODEL_KEY_GUIDE } from '@/lib/constants';
 import { PROMPT_DATA_SOURCES, getPromptSourceLabel } from '@/lib/prompt-gallery-data';
 import { getOutputSizeLabel } from '@/lib/model-capabilities';
+import { getVideoProtocolConfig } from '@/lib/video-config';
 import { useBranding } from '@/components/BrandProvider';
 import { useI18n } from '@/components/LanguageProvider';
 
 type ImageModelKeyGuide = typeof IMAGE_MODEL_KEY_GUIDE;
+
+/**
+ * 从后端下发的协议能力配置读取设置页模板。
+ * @param protocol 设置页选择的公开视频协议或外链迁移使用的旧版协议。
+ * @returns 当前部署为该协议配置的基础地址与预设模型 ID。
+ */
+function getVideoProtocolTemplate(protocol: VideoProtocol): { baseUrl: string; presetModelId: string } {
+  return getVideoProtocolConfig().protocols[protocol].settings;
+}
+
+/**
+ * 读取视频协议的创建接口，并兼容尚未下发接口元数据的旧版后端配置。
+ * @param protocol 当前视频模型协议。
+ * @returns 创建视频使用的固定请求方法与接口路径。
+ */
+function getVideoCreateEndpoint(protocol: VideoProtocol): { method: 'POST'; path: string } {
+  const configuredEndpoint = getVideoProtocolConfig().protocols[protocol]?.createEndpoint;
+  if (configuredEndpoint) return configuredEndpoint;
+  if (protocol === 'new-api') return { method: 'POST', path: '/v1/video/generations' };
+  if (protocol === 'openai') return { method: 'POST', path: '/v1/videos' };
+  return { method: 'POST', path: '/v1/videos/generations' };
+}
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -99,6 +124,55 @@ interface SettingsDraftSnapshot {
   textModels: TextModelConfig[];
   defaults: DefaultModels;
   promptOptimizeEnabled: boolean;
+}
+
+interface ModelCatalogState {
+  loading: boolean;
+  options: RemoteModelOption[];
+  error: string | null;
+  loaded: boolean;
+}
+
+interface ModelCatalogControlsProps {
+  state?: ModelCatalogState;
+  fetchLabel: string;
+  fetchingLabel: string;
+  remoteModelLabel: string;
+  selectPlaceholder: string;
+  successMessage: string;
+  emptyMessage: string;
+  onFetch: () => void;
+  onSelect: (modelId: string) => void;
+}
+
+/**
+ * 渲染单个模型配置的远端模型获取按钮、候选列表和请求结果。
+ * @param props 按钮文案、目录状态及获取和选择回调。
+ * @returns 可复用于图片、视频和文本模型的目录选择控件。
+ */
+function ModelCatalogControls({ state, fetchLabel, fetchingLabel, remoteModelLabel, selectPlaceholder, successMessage, emptyMessage, onFetch, onSelect }: ModelCatalogControlsProps) {
+  return (
+    <div className="space-y-2">
+      <Button type="button" variant="outline" size="sm" className="gap-2" disabled={state?.loading} onClick={onFetch}>
+        <RefreshCw className={`size-4 ${state?.loading ? 'animate-spin' : ''}`} />
+        {state?.loading ? fetchingLabel : fetchLabel}
+      </Button>
+      {state?.error && <p className="text-xs text-destructive">{state.error}</p>}
+      {state?.loaded && state.options.length === 0 && <p className="text-xs text-muted-foreground">{emptyMessage}</p>}
+      {state && state.options.length > 0 && (
+        <div className="space-y-2">
+          <label className="text-xs text-muted-foreground">{remoteModelLabel}</label>
+          <Select
+            value=""
+            placeholder={selectPlaceholder}
+            onValueChange={onSelect}
+            options={state.options.map(option => ({ value: option.id, label: option.name === option.id ? option.id : `${option.name} (${option.id})` }))}
+          />
+          <p className="text-xs text-muted-foreground">{successMessage}</p>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -146,18 +220,35 @@ function cloneVideoModel(model: VideoModelConfig): VideoModelConfig {
 
 /**
  * 创建新增视频模型的默认草稿。
- * @returns 使用 OpenAI 兼容协议的未完成视频模型配置。
+ * @returns 使用 OpenAI Videos 协议的未完成视频模型配置。
  */
 function createVideoModelDraft(): VideoModelConfig {
+  const template = getVideoProtocolTemplate('openai');
   return {
     id: generateModelId('video'),
     protocol: 'openai',
     name: '',
     modelId: '',
     usesPresetModelId: true,
-    presetModelId: 'grok-imagine-video',
+    presetModelId: template.presetModelId,
     apiKey: '',
-    baseUrl: 'https://flyreq.com',
+    baseUrl: template.baseUrl,
+  };
+}
+
+/**
+ * 切换视频协议并保留用户已经填写的全部可见配置。
+ * @param model 当前视频模型配置。
+ * @param protocol 用户选择的新视频协议。
+ * @returns 仅更新协议与对应隐藏预设信息的视频模型副本。
+ */
+export function patchVideoModelProtocol(model: VideoModelConfig, protocol: PublicVideoProtocol): VideoModelConfig {
+  const template = getVideoProtocolTemplate(protocol);
+  return {
+    ...model,
+    protocol,
+    presetModelId: template.presetModelId,
+    usesPresetModelId: model.modelId.trim() ? undefined : Boolean(template.presetModelId) || undefined,
   };
 }
 
@@ -282,7 +373,7 @@ function normalizeDefaults(
   const completeTextModels = textModels.filter(isCompleteTextModel);
   const firstImageModelId = completeImageModels[0]?.id || '';
   const firstTextModelId = completeTextModels[0]?.id || '';
-  const completeVideoModels = getCompleteVideoModels({ imageModels: [], videoModels, textModels: [], defaults: DEFAULT_DEFAULTS });
+  const completeVideoModels = getCompleteVideoModels({ schemaVersion: 2, imageModels: [], videoModels, textModels: [], defaults: DEFAULT_DEFAULTS });
   const firstVideoModelId = completeVideoModels[0]?.id || '';
 
   return {
@@ -294,6 +385,16 @@ function normalizeDefaults(
     imageDescribe: completeTextModels.some((model) => model.id === defaults.imageDescribe) ? defaults.imageDescribe : firstTextModelId,
     videoGeneration: completeVideoModels.some((model) => model.id === defaults.videoGeneration) ? defaults.videoGeneration : firstVideoModelId,
   };
+}
+
+/**
+ * 切换文本协议并保留用户已经填写的全部模型内容。
+ * @param model 当前文本模型配置。
+ * @param protocol 用户选择的新文本协议。
+ * @returns 仅更新协议字段的文本模型副本。
+ */
+export function patchTextModelProtocol(model: TextModelConfig, protocol: ProviderProtocol): TextModelConfig {
+  return { ...model, protocol };
 }
 
 /**
@@ -333,23 +434,25 @@ function patchTextModelFromExternal(model: TextModelConfig, config: ExternalText
 }
 
 /**
- * 根据外链数据创建 OpenAI 兼容视频模型草稿。
+ * 根据外链数据创建视频模型草稿。
  * @param config 已规范化的外链视频模型配置。
  * @returns 可在设置页继续补充并手动保存的视频模型。
  */
 function createExternalVideoModelDraft(config: ExternalVideoModelConfig): VideoModelConfig {
-  const presetModelId = 'grok-imagine-video';
+  const protocol = config.protocol || 'legacy-openai-video';
+  const template = getVideoProtocolTemplate(protocol);
+  const presetModelId = template.presetModelId;
   const configuredModelId = config.modelId?.trim() || '';
   const usesPresetModelId = !configuredModelId || configuredModelId === presetModelId;
   return {
     id: config.modelKey || generateModelId('video'),
-    protocol: 'openai',
+    protocol,
     name: config.name || '',
     modelId: usesPresetModelId ? '' : configuredModelId,
     usesPresetModelId: usesPresetModelId || undefined,
     presetModelId,
     apiKey: config.apiKey || '',
-    baseUrl: config.baseUrl || 'https://flyreq.com',
+    baseUrl: config.baseUrl || template.baseUrl,
   };
 }
 
@@ -360,50 +463,34 @@ function createExternalVideoModelDraft(config: ExternalVideoModelConfig): VideoM
  * @returns 保留未提供字段的更新后模型。
  */
 function patchVideoModelFromExternal(model: VideoModelConfig, config: ExternalVideoModelConfig): VideoModelConfig {
-  const presetModelId = model.presetModelId || 'grok-imagine-video';
-  const configuredModelId = config.modelId === undefined ? model.modelId.trim() : config.modelId.trim();
+  const protocol = config.protocol || model.protocol;
+  const protocolChanged = protocol !== model.protocol;
+  const template = getVideoProtocolTemplate(protocol);
+  const presetModelId = protocolChanged ? template.presetModelId : (model.presetModelId ?? template.presetModelId);
+  const configuredModelId = config.modelId === undefined ? (protocolChanged ? '' : model.modelId.trim()) : config.modelId.trim();
   const usesPresetModelId = config.modelId === undefined
-    ? Boolean(model.usesPresetModelId)
+    ? (protocolChanged || Boolean(model.usesPresetModelId))
     : (!configuredModelId || configuredModelId === presetModelId);
   return {
     ...model,
-    protocol: 'openai',
+    protocol,
     name: config.name ?? model.name,
     modelId: usesPresetModelId ? '' : configuredModelId,
     usesPresetModelId: usesPresetModelId || undefined,
     presetModelId,
     apiKey: config.apiKey ?? model.apiKey,
-    baseUrl: config.baseUrl ?? model.baseUrl,
+    baseUrl: config.baseUrl ?? (protocolChanged ? template.baseUrl : model.baseUrl),
   };
 }
 
 /**
- * 归一化设置表单中的默认模型，同时保留仍存在但尚未补全的用户选择。
- * @param defaults 当前表单默认模型。
- * @param imageModels 当前图片模型草稿。
- * @param videoModels 当前视频模型草稿。
- * @param textModels 当前文本模型草稿。
- * @returns 删除失效引用后的表单默认值；最终保存时仍使用严格完整性校验。
+ * 返回设置页打开时应展示的模型标识。
+ * @param defaultModelId 当前工作流保存的默认模型标识。
+ * @param models 当前类型的模型列表。
+ * @returns 默认模型仍存在时返回其标识，否则返回首个模型标识或空字符串。
  */
-function normalizeDraftDefaults(
-  defaults: DefaultModels,
-  imageModels: ImageModelConfig[],
-  videoModels: VideoModelConfig[],
-  textModels: TextModelConfig[],
-): DefaultModels {
-  const strictDefaults = normalizeDefaults(defaults, imageModels, videoModels, textModels);
-  const imageModelIds = new Set(imageModels.map(model => model.id));
-  const videoModelIds = new Set(videoModels.map(model => model.id));
-  const textModelIds = new Set(textModels.map(model => model.id));
-  return {
-    textToImage: imageModelIds.has(defaults.textToImage) ? defaults.textToImage : strictDefaults.textToImage,
-    imageToImage: imageModelIds.has(defaults.imageToImage) ? defaults.imageToImage : strictDefaults.imageToImage,
-    videoGeneration: videoModelIds.has(defaults.videoGeneration) ? defaults.videoGeneration : strictDefaults.videoGeneration,
-    reversePrompt: textModelIds.has(defaults.reversePrompt) ? defaults.reversePrompt : strictDefaults.reversePrompt,
-    agent: textModelIds.has(defaults.agent) ? defaults.agent : strictDefaults.agent,
-    promptOptimize: textModelIds.has(defaults.promptOptimize) ? defaults.promptOptimize : strictDefaults.promptOptimize,
-    imageDescribe: textModelIds.has(defaults.imageDescribe) ? defaults.imageDescribe : strictDefaults.imageDescribe,
-  };
+function getSelectedDefaultModelId<T extends { id: string }>(defaultModelId: string, models: T[]): string {
+  return models.some(model => model.id === defaultModelId) ? defaultModelId : (models[0]?.id || '');
 }
 
 export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelConfig, onExternalModelConfigConsumed }: SettingsModalProps) {
@@ -422,6 +509,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   const [checkingModels, setCheckingModels] = useState(false);
   const [modelStatuses, setModelStatuses] = useState<ModelStatus[] | null>(null);
   const [modelCheckError, setModelCheckError] = useState<string | null>(null);
+  const [modelCatalogs, setModelCatalogs] = useState<Record<string, ModelCatalogState>>({});
   const [showImageApiKey, setShowImageApiKey] = useState(false);
   const [showTextApiKey, setShowTextApiKey] = useState(false);
   const [showVideoApiKey, setShowVideoApiKey] = useState(false);
@@ -441,7 +529,6 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
   useEffect(() => {
     if (!isOpen) return;
     const registry = loadRegistry();
-    const normalizedDefaults = normalizeDefaults(registry.defaults, registry.imageModels, registry.videoModels, registry.textModels);
     const optimizeEnabled = isPromptOptimizeEnabled();
     if (savedStateTimerRef.current !== null) {
       window.clearTimeout(savedStateTimerRef.current);
@@ -453,15 +540,16 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
       setImageModels(registry.imageModels.map(cloneImageModel));
       setTextModels(registry.textModels.map(cloneTextModel));
       setVideoModels(registry.videoModels.map(cloneVideoModel));
-      setDefaults(normalizedDefaults);
-      setSelectedImageModelId(registry.imageModels[0]?.id || '');
-      setSelectedTextModelId(registry.textModels[0]?.id || '');
-      setSelectedVideoModelId(registry.videoModels[0]?.id || '');
+      setDefaults({ ...registry.defaults });
+      setSelectedImageModelId(getSelectedDefaultModelId(registry.defaults.textToImage, registry.imageModels));
+      setSelectedTextModelId(getSelectedDefaultModelId(registry.defaults.promptOptimize, registry.textModels));
+      setSelectedVideoModelId(getSelectedDefaultModelId(registry.defaults.videoGeneration, registry.videoModels));
       setError(null);
       setSuccess(null);
       setExternalConfigNotice(null);
       setModelStatuses(null);
       setModelCheckError(null);
+      setModelCatalogs({});
       setBackupError(null);
       setBackupSuccess(null);
       setPromptOptimizeEnabledState(optimizeEnabled);
@@ -471,7 +559,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
         registry.imageModels,
         registry.videoModels,
         registry.textModels,
-        normalizedDefaults,
+        registry.defaults,
         optimizeEnabled,
       )));
     });
@@ -569,19 +657,6 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     return () => { cancelled = true; };
   }, [externalModelConfig, isOpen, onExternalModelConfigConsumed, t]);
 
-  useEffect(() => {
-    if (!isOpen || initialSnapshot === null) return;
-    let cancelled = false;
-    queueMicrotask(() => {
-      if (cancelled) return;
-      setDefaults((prev) => {
-        const next = normalizeDraftDefaults(prev, imageModels, videoModels, textModels);
-        return JSON.stringify(next) === JSON.stringify(prev) ? prev : next;
-      });
-    });
-    return () => { cancelled = true; };
-  }, [imageModels, initialSnapshot, isOpen, textModels, videoModels]);
-
   const currentSerializedSnapshot = useMemo(
     () => serializeSettingsSnapshot(createSettingsSnapshot(
       imageModels,
@@ -618,6 +693,48 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     () => videoModels.find(model => model.id === selectedVideoModelId) || null,
     [selectedVideoModelId, videoModels],
   );
+  const selectedVideoCreateEndpoint = selectedVideoModel ? getVideoCreateEndpoint(selectedVideoModel.protocol) : null;
+
+  /**
+   * 清除指定配置此前从旧协议、地址或密钥获取的模型目录。
+   * @param modelId 需要清理目录状态的内部模型标识。
+   * @returns 无返回值；状态不存在时保持当前目录集合不变。
+   */
+  const clearModelCatalog = (modelId: string): void => {
+    setModelCatalogs(previous => {
+      if (!previous[modelId]) return previous;
+      const next = { ...previous };
+      delete next[modelId];
+      return next;
+    });
+  };
+
+  /**
+   * 使用当前模型的 Base URL 和 API Key 拉取远端模型目录。
+   * @param model 当前正在配置的图片、视频或文本模型。
+   * @param protocol 模型目录端点使用的鉴权协议。
+   * @returns 请求完成后更新对应模型的目录状态，无直接返回值。
+   */
+  const handleFetchModels = async (model: { id: string; baseUrl: string; apiKey: string }, protocol: ProviderProtocol): Promise<void> => {
+    setModelCatalogs(previous => ({
+      ...previous,
+      [model.id]: { loading: true, options: previous[model.id]?.options || [], error: null, loaded: false },
+    }));
+    try {
+      const options = await fetchRemoteModels({ baseUrl: model.baseUrl, apiKey: model.apiKey, protocol });
+      setModelCatalogs(previous => ({ ...previous, [model.id]: { loading: false, options, error: null, loaded: true } }));
+    } catch (requestError) {
+      setModelCatalogs(previous => ({
+        ...previous,
+        [model.id]: {
+          loading: false,
+          options: [],
+          error: requestError instanceof Error ? requestError.message : t('settings.fetchModelsFailed'),
+          loaded: true,
+        },
+      }));
+    }
+  };
 
   const handleAddImageModel = () => {
     const draft = createImageModelDraft();
@@ -632,6 +749,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
    * @returns 无返回值；通过状态更新渲染最新配置。
    */
   const handleUpdateImageModel = (id: string, patch: Partial<ImageModelConfig>) => {
+    if ('protocol' in patch || 'baseUrl' in patch || 'apiKey' in patch || 'builtinPreset' in patch) clearModelCatalog(id);
     setImageModels((prev) => prev.map((model) => {
       if (model.id !== id) return model;
       const next = { ...model, ...patch };
@@ -704,12 +822,24 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
    * @returns 无返回值。
    */
   const handleUpdateVideoModel = (id: string, patch: Partial<VideoModelConfig>) => {
+    if ('baseUrl' in patch || 'apiKey' in patch) clearModelCatalog(id);
     setVideoModels(previous => previous.map(model => {
       if (model.id !== id) return model;
-      const next = { ...model, ...patch, protocol: 'openai' as const };
+      const next = { ...model, ...patch };
       if ('modelId' in patch) next.usesPresetModelId = !next.modelId.trim();
       return next;
     }));
+  };
+
+  /**
+   * 切换公开视频协议并应用匹配的基础地址和默认模型模板。
+   * @param id 待更新视频模型的内部标识。
+   * @param protocol 用户选择的公开视频协议。
+   * @returns 无返回值。
+   */
+  const handleChangeVideoProtocol = (id: string, protocol: PublicVideoProtocol) => {
+    clearModelCatalog(id);
+    setVideoModels(previous => previous.map(model => model.id === id ? patchVideoModelProtocol(model, protocol) : model));
   };
 
   /**
@@ -724,18 +854,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     if (selectedVideoModelId === id) setSelectedVideoModelId(nextModels[0]?.id || '');
   };
 
-  const handleApplyTextTemplate = (id: string, protocol: ProviderProtocol) => {
-    const template = getDefaultTextModelTemplate(protocol);
-    handleUpdateTextModel(id, {
-      protocol: template.protocol,
-      name: template.name,
-      modelId: template.modelId,
-      baseUrl: template.baseUrl,
-      note: template.note,
-    });
-  };
-
   const handleUpdateTextModel = (id: string, patch: Partial<TextModelConfig>) => {
+    if ('baseUrl' in patch || 'apiKey' in patch) clearModelCatalog(id);
     setTextModels((prev) => prev.map((model) => (model.id === id ? { ...model, ...patch } : model)));
   };
 
@@ -769,6 +889,7 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     // 第一步只把完整模型写入默认工作流，未完成模型仍作为草稿保存在注册表中。
     const normalizedDefaults = normalizeDefaults(defaults, imageModels, videoModels, textModels);
     const registry = {
+      schemaVersion: 2 as const,
       imageModels,
       videoModels,
       textModels,
@@ -777,8 +898,9 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
 
     // 第二步持久化全部草稿，再同步依赖注册表的工作台缓存与跨组件事件。
     saveRegistry(registry);
-    if (hasNoCompleteImageModelBeforeSave && registry.defaults.textToImage) {
-      saveFirstImageModelAsFormDefault(registry.defaults.textToImage);
+    const persistedRegistry = loadRegistry();
+    if (hasNoCompleteImageModelBeforeSave && persistedRegistry.defaults.textToImage) {
+      saveFirstImageModelAsFormDefault(persistedRegistry.defaults.textToImage);
       notifyImageModelDefaultUpdated();
     }
     if (!setPromptOptimizeEnabled(promptOptimizeEnabled)) {
@@ -788,7 +910,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     syncDynamicModelExports();
     window.dispatchEvent(new Event('flyreq-model-registry-updated'));
     onApiKeyChange?.(hasConfiguredImageModel());
-    setDefaults(normalizedDefaults);
+    setImageModels(persistedRegistry.imageModels.map(cloneImageModel));
+    setVideoModels(persistedRegistry.videoModels.map(cloneVideoModel));
+    setTextModels(persistedRegistry.textModels.map(cloneTextModel));
+    setDefaults({ ...persistedRegistry.defaults });
     setSuccess(null);
     setExternalConfigNotice(null);
     setError(null);
@@ -796,10 +921,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
     setModelCheckError(null);
     // 第三步用实际写入的数据刷新比较基线，确保保存栏立即进入成功状态并自动收起。
     setInitialSnapshot(serializeSettingsSnapshot(createSettingsSnapshot(
-      imageModels,
-      videoModels,
-      textModels,
-      normalizedDefaults,
+      persistedRegistry.imageModels,
+      persistedRegistry.videoModels,
+      persistedRegistry.textModels,
+      persistedRegistry.defaults,
       promptOptimizeEnabled,
     )));
     if (savedStateTimerRef.current !== null) window.clearTimeout(savedStateTimerRef.current);
@@ -1023,7 +1148,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       onClick={() => setSelectedImageModelId(model.id)}
                       className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${selectedImageModelId === model.id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}
                     >
-                      <div className="font-medium">{model.name || t('settings.unnamedModel')}</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-medium">{model.name || t('settings.unnamedModel')}</span>
+                        {[defaults.textToImage, defaults.imageToImage].includes(model.id) && <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary"><CheckCircle2 className="size-3" />{t('settings.currentDefault')}</span>}
+                      </div>
                       <div className="text-xs text-muted-foreground">{isCompleteImageModel(model) ? t('settings.configurationComplete') : t('settings.configurationIncomplete')}</div>
                     </button>
                   ))}
@@ -1090,6 +1218,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                           {showImageApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <ModelCatalogControls
+                        state={modelCatalogs[selectedImageModel.id]}
+                        fetchLabel={t('settings.fetchModels')}
+                        fetchingLabel={t('settings.fetchingModels')}
+                        remoteModelLabel={t('settings.remoteModel')}
+                        selectPlaceholder={t('settings.selectRemoteModel')}
+                        successMessage={t('settings.modelsFetched', { count: modelCatalogs[selectedImageModel.id]?.options.length || 0 })}
+                        emptyMessage={t('settings.noRemoteModels')}
+                        onFetch={() => void handleFetchModels(selectedImageModel, selectedImageModel.protocol)}
+                        onSelect={(modelId) => handleUpdateImageModel(selectedImageModel.id, { modelId, usesPresetModelId: false })}
+                      />
                     </div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">{t('settings.maxReferenceImages')}</label>
@@ -1174,7 +1315,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                     const complete = isCompleteVideoModel(model);
                     return (
                       <button key={model.id} type="button" onClick={() => setSelectedVideoModelId(model.id)} className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${selectedVideoModelId === model.id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}>
-                        <div className="truncate font-medium">{model.name || t('settings.unnamedModel')}</div>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="truncate font-medium">{model.name || t('settings.unnamedModel')}</span>
+                          {defaults.videoGeneration === model.id && <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary"><CheckCircle2 className="size-3" />{t('settings.currentDefault')}</span>}
+                        </div>
                         <div className="text-xs text-muted-foreground">{complete ? t('settings.configurationComplete') : t('settings.configurationIncomplete')}</div>
                       </button>
                     );
@@ -1183,7 +1327,24 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
 
                 {selectedVideoModel && (
                   <div className="grid gap-3 md:grid-cols-2">
-                    <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.protocol')}</label><Select value="openai" disabled onValueChange={() => undefined} options={[{ value: 'openai', label: 'OpenAI Videos' }]} /></div>
+                    <div className="space-y-2">
+                      <label className="text-xs text-muted-foreground">{t('settings.protocol')}</label>
+                      <Select
+                        value={selectedVideoModel.protocol}
+                        onValueChange={(value) => handleChangeVideoProtocol(selectedVideoModel.id, value as PublicVideoProtocol)}
+                        options={[
+                          ...(selectedVideoModel.protocol === 'legacy-openai-video' ? [{ value: 'legacy-openai-video', label: t('settings.legacyVideoProtocol'), disabled: true }] : []),
+                          { value: 'new-api', label: 'New API' },
+                          { value: 'openai', label: 'OpenAI Videos (Sora)' },
+                          { value: 'xai', label: 'xAI Videos' },
+                        ]}
+                      />
+                      {selectedVideoCreateEndpoint && <p className="text-xs text-muted-foreground">
+                        {t('settings.videoCreateEndpoint')}: <code className="font-mono text-foreground">{selectedVideoCreateEndpoint.method} {selectedVideoCreateEndpoint.path}</code>
+                      </p>}
+                      {selectedVideoModel.protocol === 'new-api' && <p className="text-xs text-muted-foreground">{t('settings.newApiResolutionDescription')}</p>}
+                      {selectedVideoModel.protocol === 'legacy-openai-video' && <p className="text-xs text-amber-600 dark:text-amber-400">{t('settings.legacyVideoProtocolDescription')}</p>}
+                    </div>
                     <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.displayName')}</label><Input value={selectedVideoModel.name} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { name: event.target.value })} /></div>
                     <div className="space-y-2">
                       <label className="text-xs text-muted-foreground">{t('settings.modelId')}</label>
@@ -1196,6 +1357,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                     </div>
                     <div className="space-y-2"><label className="text-xs text-muted-foreground">{t('settings.baseUrl')}</label><Input value={selectedVideoModel.baseUrl} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { baseUrl: event.target.value })} /></div>
                     <div className="space-y-2 md:col-span-2"><label className="text-xs text-muted-foreground">{t('settings.apiKey')}</label><div className="relative"><Input type={showVideoApiKey ? 'text' : 'password'} value={selectedVideoModel.apiKey} onChange={event => handleUpdateVideoModel(selectedVideoModel.id, { apiKey: event.target.value })} className="pr-9" /><button type="button" onClick={() => setShowVideoApiKey(value => !value)} className="absolute right-1 top-1/2 flex size-7 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:bg-muted" aria-label={t('settings.apiKey')}>{showVideoApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}</button></div></div>
+                    <div className="md:col-span-2">
+                      <ModelCatalogControls
+                        state={modelCatalogs[selectedVideoModel.id]}
+                        fetchLabel={t('settings.fetchModels')}
+                        fetchingLabel={t('settings.fetchingModels')}
+                        remoteModelLabel={t('settings.remoteModel')}
+                        selectPlaceholder={t('settings.selectRemoteModel')}
+                        successMessage={t('settings.modelsFetched', { count: modelCatalogs[selectedVideoModel.id]?.options.length || 0 })}
+                        emptyMessage={t('settings.noRemoteModels')}
+                        onFetch={() => void handleFetchModels(selectedVideoModel, 'openai')}
+                        onSelect={(modelId) => handleUpdateVideoModel(selectedVideoModel.id, { modelId, usesPresetModelId: false })}
+                      />
+                    </div>
                     <div className="flex justify-end md:col-span-2"><Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" onClick={() => handleDeleteVideoModel(selectedVideoModel.id)}><Trash2 className="size-4" />{t('settings.deleteModel')}</Button></div>
                   </div>
                 )}
@@ -1223,7 +1397,10 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                       onClick={() => setSelectedTextModelId(model.id)}
                       className={`w-full rounded-lg border px-3 py-2 text-left text-sm ${selectedTextModelId === model.id ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/50'}`}
                     >
-                      <div className="font-medium">{model.name || t('settings.unnamedModel')}</div>
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate font-medium">{model.name || t('settings.unnamedModel')}</span>
+                        {[defaults.reversePrompt, defaults.agent, defaults.promptOptimize, defaults.imageDescribe].includes(model.id) && <span className="flex shrink-0 items-center gap-1 text-xs font-medium text-primary"><CheckCircle2 className="size-3" />{t('settings.currentDefault')}</span>}
+                      </div>
                       <div className="text-xs text-muted-foreground">{isCompleteTextModel(model) ? t('settings.configurationComplete') : t('settings.configurationIncomplete')}</div>
                     </button>
                   ))}
@@ -1237,8 +1414,8 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                         value={selectedTextModel.protocol}
                         onValueChange={(value) => {
                           const protocol = value as ProviderProtocol;
-                          handleUpdateTextModel(selectedTextModel.id, { protocol });
-                          handleApplyTextTemplate(selectedTextModel.id, protocol);
+                          clearModelCatalog(selectedTextModel.id);
+                          setTextModels(previous => previous.map(model => model.id === selectedTextModel.id ? patchTextModelProtocol(model, protocol) : model));
                         }}
                         options={[
                           { value: 'openai', label: 'OpenAI Response' },
@@ -1277,6 +1454,19 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
                           {showTextApiKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                         </button>
                       </div>
+                    </div>
+                    <div className="md:col-span-2">
+                      <ModelCatalogControls
+                        state={modelCatalogs[selectedTextModel.id]}
+                        fetchLabel={t('settings.fetchModels')}
+                        fetchingLabel={t('settings.fetchingModels')}
+                        remoteModelLabel={t('settings.remoteModel')}
+                        selectPlaceholder={t('settings.selectRemoteModel')}
+                        successMessage={t('settings.modelsFetched', { count: modelCatalogs[selectedTextModel.id]?.options.length || 0 })}
+                        emptyMessage={t('settings.noRemoteModels')}
+                        onFetch={() => void handleFetchModels(selectedTextModel, selectedTextModel.protocol)}
+                        onSelect={(modelId) => handleUpdateTextModel(selectedTextModel.id, { modelId })}
+                      />
                     </div>
                     <div className="space-y-2 md:col-span-2">
                       <label className="text-xs text-muted-foreground">{t('settings.protocolDescription')}</label>
@@ -1320,31 +1510,31 @@ export function SettingsModal({ isOpen, onClose, onApiKeyChange, externalModelCo
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">{t('settings.textToImageDefault')}</label>
-                  <Select value={defaults.textToImage} onValueChange={(value) => setDefaults((prev) => ({ ...prev, textToImage: value }))} options={completeImageOptions} />
+                  <Select value={defaults.textToImage} onValueChange={(value) => { setDefaults((prev) => ({ ...prev, textToImage: value })); setSelectedImageModelId(value); }} options={completeImageOptions} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">{t('settings.imageToImageDefault')}</label>
-                  <Select value={defaults.imageToImage} onValueChange={(value) => setDefaults((prev) => ({ ...prev, imageToImage: value }))} options={completeImageOptions} />
+                  <Select value={defaults.imageToImage} onValueChange={(value) => { setDefaults((prev) => ({ ...prev, imageToImage: value })); setSelectedImageModelId(value); }} options={completeImageOptions} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">{t('settings.videoDefault')}</label>
-                  <Select value={defaults.videoGeneration} onValueChange={(value) => setDefaults((prev) => ({ ...prev, videoGeneration: value }))} options={completeVideoOptions} />
+                  <Select value={defaults.videoGeneration} onValueChange={(value) => { setDefaults((prev) => ({ ...prev, videoGeneration: value })); setSelectedVideoModelId(value); }} options={completeVideoOptions} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">{t('settings.reversePromptDefault')}</label>
-                  <Select value={defaults.reversePrompt} onValueChange={(value) => setDefaults((prev) => ({ ...prev, reversePrompt: value }))} options={completeTextOptions} />
+                  <Select value={defaults.reversePrompt} onValueChange={(value) => { setDefaults((prev) => ({ ...prev, reversePrompt: value })); setSelectedTextModelId(value); }} options={completeTextOptions} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">{t('settings.agentDefault')}</label>
-                  <Select value={defaults.agent} onValueChange={(value) => setDefaults((prev) => ({ ...prev, agent: value }))} options={completeTextOptions} />
+                  <Select value={defaults.agent} onValueChange={(value) => { setDefaults((prev) => ({ ...prev, agent: value })); setSelectedTextModelId(value); }} options={completeTextOptions} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">{t('settings.promptOptimizeDefault')}</label>
-                  <Select value={defaults.promptOptimize} onValueChange={(value) => setDefaults((prev) => ({ ...prev, promptOptimize: value }))} options={completeTextOptions} />
+                  <Select value={defaults.promptOptimize} onValueChange={(value) => { setDefaults((prev) => ({ ...prev, promptOptimize: value })); setSelectedTextModelId(value); }} options={completeTextOptions} />
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs text-muted-foreground">{t('settings.imageDescribeDefault')}</label>
-                  <Select value={defaults.imageDescribe} onValueChange={(value) => setDefaults((prev) => ({ ...prev, imageDescribe: value }))} options={completeTextOptions} />
+                  <Select value={defaults.imageDescribe} onValueChange={(value) => { setDefaults((prev) => ({ ...prev, imageDescribe: value })); setSelectedTextModelId(value); }} options={completeTextOptions} />
                 </div>
               </div>
 

@@ -10,6 +10,15 @@ const Busboy = require('busboy');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { createXaiImagineRequestInit, getXaiImagineEndpoint } = require('./xai-imagine');
+const { createVideoRequest, formatVideoResolution, getCreatedVideoTaskId, getVideoDownloadHeaders, getVideoPollPath, normalizeVideoPollResult } = require('./video-protocols');
+const { isPublicVideoProtocol, isVideoProtocol, resolveVideoProtocolConfig, validateVideoProtocolReferences, validateVideoProtocolRequest } = require('./video-protocol-config');
+const {
+  getVideoUpstreamLogMaxChars,
+  isVideoUpstreamLogEnabled,
+  logVideoUpstreamRequest,
+  logVideoUpstreamResponse,
+  logVideoTaskSummary,
+} = require('./video-upstream-logger');
 
 const ENV_FILE_PATHS = [...new Set([
   path.join(__dirname, '.env'),
@@ -71,17 +80,17 @@ const DEFAULT_IMAGE_MODEL_DEPLOYMENT_CONFIG = {
   streamImages: true,
 };
 const DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG = {
-  id: 'flyreq-grok-imagine-video',
+  id: 'flyreq-sora-2',
   protocol: 'openai',
   name: 'FlyReq',
-  modelId: 'grok-imagine-video',
+  modelId: 'sora-2',
   baseUrl: 'https://flyreq.com',
 };
 const DEFAULT_VIDEO_WORKSPACE_CONFIG = {
-  maxRefImages: 5,
-  maxRefVideos: 5,
-  maxRefAudios: 5,
-  resolutions: [720, 480],
+  maxRefImages: 9,
+  maxRefVideos: 3,
+  maxRefAudios: 3,
+  resolutions: [720, 480, 1080, 2160],
   sizes: ['1280x720', '720x1280', '1024x1024', '1792x1024', '1024x1792', 'auto'],
   durations: [6, 10, 12, 15, 20],
   maxReferenceVideoBytes: 104857600,
@@ -620,9 +629,11 @@ function parseVideoSizeListEnv(value, fallback) {
  * @returns 可安全下发给浏览器的视频模型配置。
  */
 function resolveDefaultVideoModelConfig(env = getRuntimeEnv()) {
+  const protocolCandidate = String(env.FLYREQ_DEFAULT_VIDEO_MODEL_PROTOCOL || '').trim();
+  const protocol = isPublicVideoProtocol(protocolCandidate) ? protocolCandidate : DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.protocol;
   return {
     id: String(env.FLYREQ_DEFAULT_VIDEO_MODEL_KEY || '').trim().slice(0, 120) || DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.id,
-    protocol: 'openai',
+    protocol,
     name: String(env.FLYREQ_DEFAULT_VIDEO_MODEL_NAME || '').trim().slice(0, 120) || DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.name,
     modelId: String(env.FLYREQ_DEFAULT_VIDEO_MODEL_MODEL_ID || '').trim().slice(0, 200) || DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.modelId,
     baseUrl: String(env.FLYREQ_DEFAULT_VIDEO_MODEL_BASE_URL || '').trim().slice(0, 500) || DEFAULT_VIDEO_MODEL_DEPLOYMENT_CONFIG.baseUrl,
@@ -1397,7 +1408,7 @@ function normalizeError(error) {
 /**
  * 解析视频任务 multipart 请求，并在内存中保存受限附件。
  * @param req 原始 HTTP 请求。
- * @returns 表单字段以及参考视频、参考音频附件。
+ * @returns 表单字段以及按媒体类型分类的参考附件。
  */
 function readVideoMultipartBody(req) {
   const config = resolveVideoWorkspaceConfig();
@@ -1457,36 +1468,42 @@ function readVideoMultipartBody(req) {
  * 校验并规范化视频任务字段。
  * @param fields multipart 表单中的文本字段。
  * @param files 已解析的参考附件。
- * @returns 可持久化并发送给上游的任务参数。
+ * @returns 可持久化并发送给上游的任务参数 Promise。
  */
-function normalizeVideoTaskPayload(fields, files) {
+async function normalizeVideoTaskPayload(fields, files) {
   const config = resolveVideoWorkspaceConfig();
   const resolution = Number(fields.resolution);
   const seconds = Number(fields.seconds);
   const size = String(fields.size || '').trim().toLowerCase();
+  const aspectRatio = String(fields.aspectRatio || '').trim();
+  const rawProtocol = String(fields.protocol || '').trim();
+  const protocol = rawProtocol || 'legacy-openai-video';
   if (!String(fields.apiKey || '').trim()) throw new Error('缺少 API 密钥');
   if (!String(fields.baseUrl || '').trim()) throw new Error('缺少 API 基础地址');
   if (!String(fields.model || '').trim()) throw new Error('模型名称不能为空');
   if (!String(fields.prompt || '').trim()) throw new Error('提示词不能为空');
+  if (!isVideoProtocol(protocol)) throw new Error('视频协议无效');
   if (!Number.isInteger(resolution) || resolution < 144 || resolution > 4320) throw new Error('清晰度必须为 144 至 4320 的整数');
-  if (!Number.isInteger(seconds) || seconds < 1 || seconds > 60) throw new Error('秒数必须为 1 至 60 的整数');
+  if (!Number.isInteger(seconds)) throw new Error('视频时长必须为整数');
   if (size !== 'auto') {
     const match = size.match(/^(\d+)x(\d+)$/);
     const width = Number(match?.[1]);
     const height = Number(match?.[2]);
-    if (!match || [width, height].some(side => side < 64 || side > 4096 || side % 8 !== 0)) throw new Error('视频尺寸无效');
+    if (!match || [width, height].some(side => !Number.isInteger(side) || side < 64 || side > 4096)) throw new Error('视频尺寸无效');
   }
   if (files.videos.length > config.maxRefVideos || files.audios.length > config.maxRefAudios || files.images.length > config.maxRefImages) throw new Error('参考附件数量超过限制');
-  return {
+  const payload = {
     mode: 'video-generation',
     source: 'flyreq',
-    protocol: 'openai',
+    protocol,
     apiKey: String(fields.apiKey).trim(),
     baseUrl: normalizeProtocolBaseUrl('openai', fields.baseUrl),
     model: String(fields.model).trim(),
+    modelName: String(fields.modelName || fields.model).trim().slice(0, 200),
     prompt: String(fields.prompt).trim(),
     resolution,
     size,
+    aspectRatio,
     seconds,
     parallelCount: 1,
     references: {
@@ -1494,6 +1511,26 @@ function normalizeVideoTaskPayload(fields, files) {
       audios: files.audios.map(file => ({ name: file.filename, mimeType: file.mimeType, size: file.size })),
       images: files.images.map(file => ({ name: file.filename, mimeType: file.mimeType, size: file.size })),
     },
+  };
+  const profile = validateVideoProtocolRequest(resolveVideoProtocolConfig(getRuntimeEnv()), protocol, payload.model, payload, files);
+  await validateVideoProtocolReferences(profile, payload, files);
+  return payload;
+}
+
+/**
+ * 构建视频任务的统一日志上下文，并计算从任务创建至当前阶段的耗时。
+ * @param {{ taskId: string, modelName: string, model: string, resolution: number, startedAtMs: number }} trace 任务追踪基础信息。
+ * @param {Record<string, unknown>} [extra] 当前阶段需要补充的诊断字段。
+ * @returns {Record<string, unknown>} 可直接交给脱敏日志模块的追踪上下文。
+ */
+function getVideoTaskLogContext(trace, extra = {}) {
+  return {
+    taskId: trace.taskId,
+    modelName: trace.modelName,
+    model: trace.model,
+    resolution: formatVideoResolution(trace.resolution),
+    elapsedMs: Math.max(0, Date.now() - trace.startedAtMs),
+    ...extra,
   };
 }
 
@@ -1522,32 +1559,19 @@ function getVideoUpstreamErrorDetail(payload, responseText, fallback) {
 }
 
 /**
- * 记录视频上游失败响应，同时避免把签名查询参数或 API Key 写入日志。
- * @param {string} stage 视频请求阶段：创建、轮询或结果下载。
- * @param {string|URL} url 实际上游请求地址。
- * @param {Response} response 上游 HTTP 响应。
- * @param {string} responseText 上游原始响应文本。
- * @param {Record<string, string>} [context] 任务 ID 等不敏感诊断上下文。
- * @returns 无返回值；诊断信息写入服务端错误日志。
+ * 从运行时环境变量读取视频上游日志配置。
+ * @returns {{ enabled: boolean, maxChars: number, logDir: string|undefined }} 日志开关、单条响应正文的最大字符数和落盘目录。
  */
-function logVideoUpstreamFailure(stage, url, response, responseText, context = {}) {
-  const maxChars = parseIntegerEnv(getRuntimeEnv().FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS, 65536, { min: 1024, max: 1024 * 1024 });
-  const rawBody = String(responseText || '');
-  const loggedBody = rawBody.length > maxChars
-    ? `${rawBody.slice(0, maxChars)}\n...[响应已截断，原始字符数=${rawBody.length}]`
-    : rawBody;
-  const diagnostics = {
-    stage,
-    url: getSafeUrlLabel(url),
-    status: response.status,
-    statusText: response.statusText,
-    contentType: response.headers.get('content-type') || '',
-    requestId: response.headers.get('x-request-id') || response.headers.get('request-id') || '',
-    cfRay: response.headers.get('cf-ray') || '',
-    ...context,
-    body: loggedBody || '<empty>',
+function getVideoUpstreamLogOptions() {
+  const env = getRuntimeEnv();
+  return {
+    enabled: isVideoUpstreamLogEnabled(env.FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED),
+    maxChars: getVideoUpstreamLogMaxChars(
+      env.FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS,
+      env.FLYREQ_UPSTREAM_ERROR_LOG_MAX_CHARS,
+    ),
+    logDir: env.FLYREQ_VIDEO_UPSTREAM_LOG_DIR,
   };
-  console.error('[video-upstream] 上游响应异常\n' + JSON.stringify(diagnostics, null, 2));
 }
 
 function validateEnumValue(value, validValues, fieldName) {
@@ -2337,7 +2361,7 @@ function waitForVideoPoll(intervalMs, signal) {
 /**
  * 原子创建单个视频任务并触发独立调度器。
  * @param payload 已规范化的视频任务参数。
- * @param files 参考视频和参考音频附件。
+ * @param files 已校验的参考附件。
  * @param req 原始请求，用于限流来源识别。
  * @returns 新建任务标识。
  */
@@ -2363,40 +2387,31 @@ function createVideoTask(payload, files, req) {
  * 创建上游异步视频任务。
  * @param apiKey 视频模型 API Key。
  * @param request 视频生成参数。
- * @param files 参考视频和参考音频附件。
+ * @param files 已校验的参考附件。
  * @param {AbortSignal} signal 视频任务中止信号。
+ * @param {{ taskId: string, modelName: string, model: string, resolution: number, startedAtMs: number }} trace 视频任务日志追踪信息。
  * @returns 上游视频任务标识。
  */
-async function createUpstreamVideo(apiKey, request, files, signal) {
+async function createUpstreamVideo(apiKey, request, files, signal, trace) {
   const baseUrl = resolveAndLogOutboundBaseUrl('视频生成', 'openai', request.baseUrl).baseUrl;
-  const url = appendProtocolApiPath('openai', baseUrl, '/v1/videos/generations');
-  const common = {
-    model: request.model,
-    prompt: request.prompt,
-    resolution: request.resolution,
-    size: request.size,
-    seconds: request.seconds,
-  };
-  let body;
-  let headers = { Authorization: `Bearer ${apiKey}` };
-  if (files.videos.length > 0 || files.audios.length > 0 || files.images.length > 0) {
-    body = new FormData();
-    for (const [key, value] of Object.entries(common)) body.append(key, String(value));
-    for (const file of files.videos) body.append('reference_videos', new Blob([file.buffer], { type: file.mimeType }), file.filename);
-    for (const file of files.audios) body.append('reference_audios', new Blob([file.buffer], { type: file.mimeType }), file.filename);
-    for (const file of files.images) body.append('reference_images', new Blob([file.buffer], { type: file.mimeType }), file.filename);
-  } else {
-    headers = { ...headers, 'Content-Type': 'application/json' };
-    body = JSON.stringify(common);
-  }
-  const response = await fetchWithTimeout(url, { method: 'POST', headers, body, signal });
+  const upstreamRequest = createVideoRequest(request.protocol, apiKey, request, files);
+  const url = appendProtocolApiPath('openai', baseUrl, upstreamRequest.path);
+  const fetchInit = { ...upstreamRequest.init, signal };
+  const logOptions = getVideoUpstreamLogOptions();
+  const context = getVideoTaskLogContext(trace, { protocol: request.protocol });
+  logVideoUpstreamRequest('create', url, fetchInit, context, logOptions);
+  const response = await fetchWithTimeout(url, fetchInit);
   const responseText = await response.text();
   const data = parseJsonSafely(responseText);
-  if (!response.ok || !data?.id) {
-    logVideoUpstreamFailure('create', url, response, responseText, { model: request.model });
+  const upstreamTaskId = getCreatedVideoTaskId(request.protocol, data);
+  logVideoUpstreamResponse('create', url, response, responseText, context, {
+    ...logOptions,
+    isError: !response.ok || !upstreamTaskId,
+  });
+  if (!response.ok || !upstreamTaskId) {
     throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '未返回任务 ID')}`);
   }
-  return String(data.id);
+  return upstreamTaskId;
 }
 
 /**
@@ -2405,27 +2420,35 @@ async function createUpstreamVideo(apiKey, request, files, signal) {
  * @param request 视频生成参数。
  * @param upstreamTaskId 上游视频任务标识。
  * @param {AbortSignal} signal 视频任务中止信号。
- * @returns 完成视频的远程 URL。
+ * @param {{ taskId: string, modelName: string, model: string, resolution: number, startedAtMs: number }} trace 视频任务日志追踪信息。
+ * @returns 完成视频的远程 URL 与允许携带认证头的实际上游来源。
  */
-async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
+async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal, trace) {
   const env = getRuntimeEnv();
   const intervalMs = parseIntegerEnv(env.FLYREQ_VIDEO_POLL_INTERVAL_MS, 5000, { min: 1000, max: 60000 });
   const timeoutMs = parseIntegerEnv(env.FLYREQ_VIDEO_TIMEOUT_MS, 1800000, { min: 10000, max: 24 * 60 * 60 * 1000 });
   const baseUrl = resolveAndLogOutboundBaseUrl('视频任务轮询', 'openai', request.baseUrl).baseUrl;
-  const url = appendProtocolApiPath('openai', baseUrl, `/v1/videos/${encodeURIComponent(upstreamTaskId)}`);
+  const url = appendProtocolApiPath('openai', baseUrl, getVideoPollPath(request.protocol, upstreamTaskId));
   const deadline = Date.now() + timeoutMs;
+  const logOptions = getVideoUpstreamLogOptions();
   while (Date.now() < deadline) {
     signal.throwIfAborted();
-    const response = await fetchWithTimeout(url, { headers: { Authorization: `Bearer ${apiKey}` }, signal });
+    const context = getVideoTaskLogContext(trace, { protocol: request.protocol, upstreamTaskId });
+    const fetchInit = { headers: { Authorization: `Bearer ${apiKey}` }, signal };
+    logVideoUpstreamRequest('poll', url, fetchInit, context, logOptions);
+    const response = await fetchWithTimeout(url, fetchInit);
     const responseText = await response.text();
     const data = parseJsonSafely(responseText);
+    const result = data ? normalizeVideoPollResult(request.protocol, data, baseUrl, upstreamTaskId) : null;
+    logVideoUpstreamResponse('poll', url, response, responseText, context, {
+      ...logOptions,
+      isError: !response.ok || !data || result?.state === 'failed',
+    });
     if (!response.ok || !data) {
-      logVideoUpstreamFailure('poll', url, response, responseText, { upstreamTaskId });
       throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '轮询响应格式无效')}`);
     }
-    if (data.status === 'completed' && typeof data.url === 'string' && data.url) return data.url;
-    if (data.status === 'failed') {
-      logVideoUpstreamFailure('poll-failed', url, response, responseText, { upstreamTaskId });
+    if (result.state === 'completed') return { remoteUrl: result.remoteUrl, authenticatedOrigin: new URL(baseUrl).origin };
+    if (result.state === 'failed') {
       throw new Error(`上游视频任务失败：${getVideoUpstreamErrorDetail(data, responseText, '上游未返回失败原因')}`);
     }
     await waitForVideoPoll(intervalMs, signal);
@@ -2438,16 +2461,25 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal) {
  * @param taskId 本地视频任务标识。
  * @param remoteUrl 上游完成视频 URL。
  * @param apiKey 下载视频时使用的 API Key。
+ * @param authenticatedOrigin 允许携带认证头的实际上游来源。
  * @param {AbortSignal} signal 视频任务中止信号。
+ * @param {{ taskId: string, modelName: string, model: string, resolution: number, startedAtMs: number }} trace 视频任务日志追踪信息。
  * @returns 站内视频播放地址。
  */
-async function cacheVideoResult(taskId, remoteUrl, apiKey, signal) {
-  const response = await fetchWithTimeout(remoteUrl, { headers: { Authorization: `Bearer ${apiKey}` }, signal });
+async function cacheVideoResult(taskId, remoteUrl, apiKey, authenticatedOrigin, signal, trace) {
+  const resultUrl = new URL(remoteUrl);
+  const headers = getVideoDownloadHeaders(resultUrl.toString(), authenticatedOrigin, apiKey);
+  const fetchInit = { headers, signal };
+  const logOptions = getVideoUpstreamLogOptions();
+  const context = getVideoTaskLogContext(trace);
+  logVideoUpstreamRequest('download', resultUrl, fetchInit, context, logOptions);
+  const response = await fetchWithTimeout(resultUrl.toString(), fetchInit);
   if (!response.ok || !response.body) {
     const responseText = await response.text().catch(() => '');
-    logVideoUpstreamFailure('download', remoteUrl, response, responseText, { taskId });
+    logVideoUpstreamResponse('download', resultUrl, response, responseText, context, { ...logOptions, isError: true });
     throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(parseJsonSafely(responseText), responseText, '视频下载失败')}`);
   }
+  logVideoUpstreamResponse('download', resultUrl, response, undefined, context, logOptions);
   const ext = getVideoExtension(response.headers.get('content-type'));
   const filePath = path.join(VIDEO_DIR, `${taskId}.${ext}`);
   try {
@@ -2475,13 +2507,21 @@ async function runVideoTask(taskId) {
     return;
   }
   const request = JSON.parse(task.request_json);
+  const startedAtMs = Number.isFinite(Date.parse(task.created_at)) ? Date.parse(task.created_at) : Date.now();
+  const trace = {
+    taskId,
+    modelName: request.modelName || request.model,
+    model: request.model,
+    resolution: request.resolution,
+    startedAtMs,
+  };
   db.prepare("UPDATE tasks SET status = 'processing' WHERE id = ?").run(taskId);
   broadcastTask(taskId);
   broadcastQueueStatus();
   try {
-    const upstreamTaskId = await createUpstreamVideo(apiKey, request, files, abortController.signal);
-    const remoteUrl = await pollUpstreamVideo(apiKey, request, upstreamTaskId, abortController.signal);
-    const videoUrl = await cacheVideoResult(taskId, remoteUrl, apiKey, abortController.signal);
+    const upstreamTaskId = await createUpstreamVideo(apiKey, request, files, abortController.signal, trace);
+    const { remoteUrl, authenticatedOrigin } = await pollUpstreamVideo(apiKey, request, upstreamTaskId, abortController.signal, trace);
+    const videoUrl = await cacheVideoResult(taskId, remoteUrl, apiKey, authenticatedOrigin, abortController.signal, trace);
     abortController.signal.throwIfAborted();
     const completedAt = new Date().toISOString();
     const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
@@ -2502,6 +2542,15 @@ async function runVideoTask(taskId) {
     }
   }
   const finalTask = db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId);
+  const logOptions = getVideoUpstreamLogOptions();
+  logVideoTaskSummary({
+    ...getVideoTaskLogContext(trace),
+    status: finalTask?.status || 'unknown',
+    totalDurationMs: Math.max(0, Date.now() - startedAtMs),
+  }, {
+    ...logOptions,
+    isError: ![TASK_STATUS.COMPLETED, TASK_STATUS.CANCELLED].includes(finalTask?.status),
+  });
   if (finalTask?.status === TASK_STATUS.CANCELLED) deleteTaskVideoFile(taskId);
   cleanupTaskRuntimeState(taskId);
   broadcastTask(taskId);
@@ -2514,7 +2563,7 @@ async function runVideoTask(taskId) {
  * @returns {{found: boolean, cancelled: boolean}} 是否找到任务以及是否成功取消。
  */
 function cancelVideoTask(taskId) {
-  const task = db.prepare('SELECT id, status FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation');
+  const task = db.prepare('SELECT id, status, request_json, created_at FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation');
   if (!task) return { found: false, cancelled: false };
   if (![TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED, TASK_STATUS.PROCESSING].includes(task.status)) {
     return { found: true, cancelled: false };
@@ -2525,6 +2574,21 @@ function cancelVideoTask(taskId) {
   const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
   db.prepare('UPDATE tasks SET status = ?, error = ?, completed_at = ?, expires_at = ? WHERE id = ?')
     .run(TASK_STATUS.CANCELLED, '视频任务已取消', completedAt, expiresAt, taskId);
+
+  // 排队任务不会进入 runVideoTask，因此在这里补写唯一的终态摘要；处理中任务由执行器统一记录，避免重复日志。
+  if ([TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED].includes(task.status)) {
+    const request = parseJsonSafely(task.request_json) || {};
+    const startedAtMs = Number.isFinite(Date.parse(task.created_at)) ? Date.parse(task.created_at) : Date.now();
+    logVideoTaskSummary({
+      taskId,
+      modelName: request.modelName || request.model || '',
+      model: request.model || '',
+      resolution: request.resolution ? formatVideoResolution(request.resolution) : '',
+      status: TASK_STATUS.CANCELLED,
+      elapsedMs: Math.max(0, Date.now() - startedAtMs),
+      totalDurationMs: Math.max(0, Date.now() - startedAtMs),
+    }, getVideoUpstreamLogOptions());
+  }
 
   // 第二步从等待队列移除任务，并中止本地正在进行的上游创建、轮询或缓存请求。
   // 当前兼容协议没有定义统一的上游取消端点，因此任务已提交上游后只能停止本地继续处理。
@@ -2722,6 +2786,11 @@ function serializeTask(task) {
     return { id: task.id, status: 'expired', error: '该任务已超出取回时间' };
   }
   const result = task.result_json ? JSON.parse(task.result_json) : undefined;
+  const createdAtMs = Date.parse(task.created_at);
+  const completedAtMs = task.completed_at ? Date.parse(task.completed_at) : Date.now();
+  const durationMs = Number.isFinite(createdAtMs) && Number.isFinite(completedAtMs)
+    ? Math.max(0, completedAtMs - createdAtMs)
+    : undefined;
   return {
     id: task.id,
     status: task.status,
@@ -2731,6 +2800,7 @@ function serializeTask(task) {
     warning: task.warning,
     createdAt: task.created_at,
     completedAt: task.completed_at,
+    durationMs,
     expiresAt: task.expires_at,
   };
 }
@@ -3012,6 +3082,7 @@ async function handleApi(req, res, pathname) {
           defaultImageModel: resolveDefaultImageModelConfig(env),
           defaultVideoModel: resolveDefaultVideoModelConfig(env),
           videoWorkspace: resolveVideoWorkspaceConfig(env),
+          videoProtocols: resolveVideoProtocolConfig(env),
           branding: resolvePlatformBranding(env),
         },
         {
@@ -3181,23 +3252,27 @@ async function handleApi(req, res, pathname) {
       return true;
     }
 
-    // ===== 模型检查代理（统一使用 /v1/models） =====
-    if (req.method === 'GET' && apiPathname === '/api/flyreq/proxy/models') {
+    // ===== 模型检查与目录代理 =====
+    if ((req.method === 'GET' || req.method === 'POST') && apiPathname === '/api/flyreq/proxy/models') {
       try {
         const parsed = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
-        const baseUrl = parsed.searchParams.get('baseUrl');
-        const apiKey = parsed.searchParams.get('apiKey');
-        const protocol = parsed.searchParams.get('protocol') || 'openai';
+        // POST 将密钥放在请求体内，避免 API Key 出现在浏览器地址、代理日志和服务器访问日志中。
+        const body = req.method === 'POST' ? await readJsonBody(req) : {};
+        const baseUrl = req.method === 'POST' ? body.baseUrl : parsed.searchParams.get('baseUrl');
+        const apiKey = req.method === 'POST' ? body.apiKey : parsed.searchParams.get('apiKey');
+        const protocol = (req.method === 'POST' ? body.protocol : parsed.searchParams.get('protocol')) || 'openai';
         if (!baseUrl || !apiKey) {
           sendJson(res, 400, { error: 'Missing baseUrl or apiKey' });
           return true;
         }
 
         const normalizedBaseUrl = resolveAndLogOutboundBaseUrl('模型列表', protocol, baseUrl).baseUrl;
-        const modelsUrl = `${stripProtocolVersionSuffix(protocol, normalizedBaseUrl)}/v1/models`;
-        // 模型列表查询只发送 Authorization 头。x-goog-api-key 仅用于 Gemini 生成端点，
-        // 对 /v1/models (兼容 OpenAI 格式的 NewAPI 等) 会引发错误或返回空列表。
-        const headers = { Authorization: `Bearer ${apiKey}` };
+        const isGoogle = protocol === 'google';
+        const modelsUrl = `${stripProtocolVersionSuffix(protocol, normalizedBaseUrl)}${isGoogle ? '/v1beta/models' : '/v1/models'}`;
+        // Google 原生目录使用 x-goog-api-key；其余兼容协议统一使用 Bearer 认证。
+        const headers = isGoogle
+          ? { 'x-goog-api-key': String(apiKey) }
+          : { Authorization: `Bearer ${apiKey}` };
 
         const response = await fetchWithTimeout(modelsUrl, { method: 'GET', headers });
         let data = null;
@@ -3212,9 +3287,10 @@ async function handleApi(req, res, pathname) {
     // 批量创建端点：请求体包含公共参数和 parallelCount，响应按图片序号返回独立 taskIds。
     if (req.method === 'POST' && apiPathname === '/api/flyreq/video-tasks') {
       const { fields, files } = await readVideoMultipartBody(req);
-      const payload = normalizeVideoTaskPayload(fields, files);
+      const payload = await normalizeVideoTaskPayload(fields, files);
       const taskId = createVideoTask(payload, files, req);
-      sendJson(res, 202, { taskId });
+      const task = serializeTask(db.prepare('SELECT * FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation'));
+      sendJson(res, 202, { ...task, taskId });
       return true;
     }
 

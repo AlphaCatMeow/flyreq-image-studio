@@ -78,7 +78,27 @@ describe('external model config URL parser', () => {
     }))}`);
 
     expect(parseExternalModelConfig(textUrl)).toMatchObject({ type: 'text', protocol: 'google', modelKey: 'text-one', note: 'Gemini protocol' });
-    expect(parseExternalModelConfig(videoUrl)).toMatchObject({ type: 'video', protocol: 'openai', modelKey: 'video-one', modelId: 'grok-imagine-video' });
+    expect(parseExternalModelConfig(videoUrl)).toMatchObject({ type: 'video', protocol: 'legacy-openai-video', modelKey: 'video-one', modelId: 'grok-imagine-video' });
+  });
+
+  it('accepts New API and xAI video protocols from external links', () => {
+    const newApiUrl = new URL('https://example.com/?configureModel=1&type=video&protocol=new-api&name=NewAPI&modelId=video-model&baseUrl=https%3A%2F%2Fnewapi.example.com');
+    const xaiUrl = new URL(`https://example.com/?provider=${encodeURIComponent(JSON.stringify({ type: 'video', protocol: 'xai', name: 'xAI', modelId: 'grok-imagine-video' }))}`);
+
+    expect(parseExternalModelConfig(newApiUrl)).toMatchObject({ type: 'video', protocol: 'new-api' });
+    expect(parseExternalModelConfig(xaiUrl)).toMatchObject({ type: 'video', protocol: 'xai' });
+  });
+
+  it('仅在显式 protocol 字段中启用新的 OpenAI Videos 协议', () => {
+    const legacyUrl = new URL(`https://example.com/?provider=${encodeURIComponent(JSON.stringify({
+      type: 'video', provider: 'openai', modelId: 'grok-imagine-video',
+    }))}`);
+    const soraUrl = new URL(`https://example.com/?provider=${encodeURIComponent(JSON.stringify({
+      type: 'video', protocol: 'openai', modelId: 'sora-2',
+    }))}`);
+
+    expect(parseExternalModelConfig(legacyUrl)).toMatchObject({ type: 'video', protocol: 'legacy-openai-video' });
+    expect(parseExternalModelConfig(soraUrl)).toMatchObject({ type: 'video', protocol: 'openai' });
   });
 
   it('removes external config params and hash from URL', () => {
@@ -124,9 +144,18 @@ describe('external model config URL parser', () => {
 
   it('matches existing text and video models by stable key or signature', () => {
     const textModels: TextModelConfig[] = [{ id: 'text-one', protocol: 'openai', name: 'Text One', modelId: 'gpt-5.4-mini', apiKey: '', baseUrl: 'https://text.example.com' }];
-    const videoModels: VideoModelConfig[] = [{ id: 'video-one', protocol: 'openai', name: 'Video One', modelId: '', usesPresetModelId: true, presetModelId: 'grok-imagine-video', apiKey: '', baseUrl: 'https://video.example.com' }];
+    const videoModels: VideoModelConfig[] = [{ id: 'video-one', protocol: 'legacy-openai-video', name: 'Video One', modelId: '', usesPresetModelId: true, presetModelId: 'grok-imagine-video', apiKey: '', baseUrl: 'https://video.example.com' }];
 
     expect(getExternalTextModelMatch(textModels, { type: 'text', name: 'Text One', modelId: 'gpt-5.4-mini', baseUrl: 'https://text.example.com/' })?.id).toBe('text-one');
     expect(getExternalVideoModelMatch(videoModels, { type: 'video', name: 'Video One', modelId: 'grok-imagine-video', baseUrl: 'https://video.example.com/' })?.id).toBe('video-one');
+  });
+
+  it('requires the video protocol to match when using a model signature', () => {
+    const videoModels: VideoModelConfig[] = [{ id: 'video-one', protocol: 'openai', name: 'Video One', modelId: 'grok-imagine-video', apiKey: '', baseUrl: 'https://video.example.com' }];
+    const signature = { type: 'video' as const, name: 'Video One', modelId: 'grok-imagine-video', baseUrl: 'https://video.example.com/' };
+
+    expect(getExternalVideoModelMatch(videoModels, { ...signature, protocol: 'openai' })?.id).toBe('video-one');
+    expect(getExternalVideoModelMatch(videoModels, { ...signature, protocol: 'xai' })).toBeUndefined();
+    expect(getExternalVideoModelMatch(videoModels, { ...signature, modelKey: 'video-one', protocol: 'xai' })?.id).toBe('video-one');
   });
 });

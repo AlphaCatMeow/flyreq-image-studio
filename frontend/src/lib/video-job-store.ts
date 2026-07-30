@@ -1,3 +1,5 @@
+import type { VideoProtocol } from '@/lib/flyreq-models';
+
 export interface VideoReferenceMetadata {
   name: string;
   type: string;
@@ -10,14 +12,20 @@ export interface StoredVideoJob {
   status: '排队中' | 'processing' | 'completed' | 'failed' | 'cancelled';
   prompt: string;
   modelId: string;
+  modelName?: string;
+  apiModelId?: string;
+  protocol?: VideoProtocol;
   resolution: number;
   videoSize: string;
+  aspectRatio?: string;
   seconds: number;
   referenceVideos: VideoReferenceMetadata[];
   referenceAudios: VideoReferenceMetadata[];
   referenceImages: VideoReferenceMetadata[];
   createdAt: string;
   completedAt?: string;
+  durationMs?: number;
+  durationUpdatedAt?: string;
   videoUrl?: string;
   cached?: boolean;
   error?: string;
