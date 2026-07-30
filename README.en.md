@@ -74,6 +74,12 @@ Built from [tianjiangqiji/nova-image-studio](https://github.com/tianjiangqiji/no
 |:---:|:---:|:---:|
 | ![Wide image workspace](doc/生图工作台宽屏.png) | ![Narrow image workspace](doc/生图工作台窄屏.png) | ![Mobile image workspace](doc/生图工作台手机版.png) |
 
+### Video Workspace
+
+| Wide | Narrow | Mobile |
+|:---:|:---:|:---:|
+| ![Wide Video workspace](doc/视频工作台宽屏.png) | ![Narrow Video workspace](doc/视频工作台窄屏.png) | ![Mobile Video workspace](doc/视频工作台手机版.png) |
+
 ### Agent Mode
 
 | Planning | Generation |

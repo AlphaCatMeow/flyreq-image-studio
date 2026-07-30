@@ -6,6 +6,7 @@
 
 /* Light theme (default) - Slate palette with Sky blue */
 :root {
+  color-scheme: light;
   --background: #ffffff;
   --foreground: #0f172a;
   --card: #f8fafc;
@@ -47,10 +48,14 @@
   --warning-foreground: #ffffff;
   --processing: #0EA5E9;
   --processing-foreground: #ffffff;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+  --scrollbar-thumb-active: #64748b;
 }
 
 /* Dark theme - Slate palette with Sky blue */
 [data-theme="dark"] {
+  color-scheme: dark;
   --background: #020617;
   --foreground: #f1f5f9;
   --card: #0f172a;
@@ -91,11 +96,15 @@
   --warning-foreground: #020617;
   --processing: #38BDF8;
   --processing-foreground: #0f172a;
+  --scrollbar-thumb: #334155;
+  --scrollbar-thumb-hover: #475569;
+  --scrollbar-thumb-active: #64748b;
 }
 
 /* System preference - dark */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
+    color-scheme: dark;
     --background: #020617;
     --foreground: #f1f5f9;
     --card: #0f172a;
@@ -136,6 +145,9 @@
     --warning-foreground: #020617;
     --processing: #38BDF8;
     --processing-foreground: #0f172a;
+    --scrollbar-thumb: #334155;
+    --scrollbar-thumb-hover: #475569;
+    --scrollbar-thumb-active: #64748b;
   }
 }
 
@@ -223,32 +235,41 @@ body {
   animation: shimmer 1.5s infinite;
 }
 
-/* Custom scrollbar for virtual scroll container */
-.virtual-scroll-container {
+/* 全局滚动条：细轨道与留白边框在明暗主题下保持克制的视觉层级。 */
+* {
   scrollbar-width: thin;
-  scrollbar-color: hsl(var(--muted-foreground) / 0.3) hsl(var(--muted) / 0.2);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 
-.virtual-scroll-container::-webkit-scrollbar {
-  width: 8px;
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
 
-.virtual-scroll-container::-webkit-scrollbar-track {
-  background: hsl(var(--muted) / 0.2);
-  border-radius: 4px;
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
-.virtual-scroll-container::-webkit-scrollbar-thumb {
-  background: hsl(var(--muted-foreground) / 0.3);
-  border-radius: 4px;
-  transition: background 0.2s ease;
+*::-webkit-scrollbar-thumb {
+  min-width: 40px;
+  min-height: 40px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-color: var(--scrollbar-thumb);
+  background-clip: padding-box;
 }
 
-.virtual-scroll-container::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--muted-foreground) / 0.5);
+*::-webkit-scrollbar-thumb:hover {
+  border-width: 2px;
+  background-color: var(--scrollbar-thumb-hover);
 }
 
-/* Hide scrollbar but keep functionality */
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active);
+}
+
+/* 隐藏滚动条但保留滚动能力。 */
 .scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;
