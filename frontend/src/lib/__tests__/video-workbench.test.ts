@@ -20,11 +20,18 @@ import {
   isValidVideoResolution,
   isValidVideoSize,
 } from '@/lib/video-config';
+import { composeEffectiveVideoPrompt } from '@/lib/video-prompt-variants';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const serverSource = fs.readFileSync(path.resolve(testDir, '../../../../backend/server.js'), 'utf8');
 const videoTaskClientSource = fs.readFileSync(path.resolve(testDir, '../video-task-client.ts'), 'utf8');
 const videoWorkspaceSource = fs.readFileSync(path.resolve(testDir, '../../components/VideoGenerationWorkspace.tsx'), 'utf8');
+
+describe('逐视频附加提示词', () => {
+  it('将共享主提示词与当前视频要求组合成完整提示词', () => {
+    expect(composeEffectiveVideoPrompt('共享场景', '俯视镜头')).toBe('共享场景\n\n本个视频要求：\n俯视镜头');
+  });
+});
 
 describe('视频模型注册表与工作台配置', () => {
   afterEach(() => {
@@ -172,6 +179,11 @@ describe('后端视频任务契约', () => {
     expect(serverSource).toContain("require('./video-protocols')");
     expect(serverSource).toContain('function drainVideoQueue()');
     expect(serverSource).toContain("apiPathname === '/api/flyreq/video-tasks'");
+    expect(serverSource).toContain('function createVideoTaskBatch(payload, files, req)');
+    expect(serverSource).toContain('function parseVideoPromptVariants(rawValue, parallelCount)');
+    expect(serverSource).toContain('prompt: composeEffectiveVideoPrompt(payload.prompt, promptVariant)');
+    expect(serverSource).toContain('enforceQueueCapacity(source, limitConfig, payload.parallelCount, payload.parallelCount)');
+    expect(serverSource).toContain('sendJson(res, 202, { taskIds, tasks })');
     expect(serverSource).toContain('cancelVideoTask(taskId)');
     expect(serverSource).toContain('(ack|cancel)');
     expect(serverSource).toContain('videoTaskAbortControllers');

@@ -10,7 +10,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { buttonVariants } from '@/components/ui/button';
 import { useI18n } from '@/components/LanguageProvider';
-import { getPathForLocale, LOCALE_STORAGE_KEY, type Locale } from '@/lib/i18n';
+import { getPathForLocale, type Locale } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 
 const localeOptions: Array<{ value: Locale; labelKey: 'language.en' | 'language.zh' }> = [
@@ -24,15 +24,10 @@ export function LanguageToggle({ iconOnly = false }: { iconOnly?: boolean }) {
   const selectLocale = (nextLocale: string) => {
     if (nextLocale !== 'en' && nextLocale !== 'zh') return;
     setLocale(nextLocale);
-    try {
-      localStorage.setItem(LOCALE_STORAGE_KEY, nextLocale);
-    } catch {
-      // Storage can be unavailable in hardened/private browser modes.
-    }
 
     const nextPath = getPathForLocale(window.location.pathname, nextLocale);
     const nextUrl = `${nextPath}${window.location.search}${window.location.hash}`;
-    window.location.assign(nextUrl);
+    window.history.replaceState(window.history.state, '', nextUrl);
   };
 
   const currentLabel = t(locale === 'zh' ? 'language.zh' : 'language.en');

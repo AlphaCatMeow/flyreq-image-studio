@@ -28,7 +28,7 @@
         "aspectRatio": { "visible": false, "values": [] },
         "resolution": { "visible": true, "values": [480, 720, 1080, 2160], "allowCustom": true }
       },
-      "references": { "images": 9, "videos": 3, "audios": 3, "imageMimeTypes": ["image/jpeg", "image/png", "image/webp"], "videoMimeTypes": ["video/*"], "audioMimeTypes": ["audio/*"], "imageSizeMustMatchOutput": true },
+      "references": { "images": 9, "videos": 3, "audios": 3, "imageMimeTypes": ["image/jpeg", "image/png", "image/webp"], "videoMimeTypes": ["video/*"], "audioMimeTypes": ["audio/*"], "imageSizeMustMatchOutput": false },
       "modelProfiles": [
         {
           "modelPrefix": "sora-2-pro",

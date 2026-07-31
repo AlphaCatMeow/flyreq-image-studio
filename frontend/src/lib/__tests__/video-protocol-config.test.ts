@@ -135,7 +135,7 @@ describe('视频协议能力配置', () => {
     }, { images: Array.from({ length: 10 }, () => ({})), videos: [], audios: [] })).toThrow('参考附件不符合当前协议限制');
   });
 
-  it('按 OpenAI 官方要求校验参考图格式与输出尺寸', async () => {
+  it('校验 OpenAI 参考图格式但允许素材尺寸与输出尺寸不同', async () => {
     const config = resolveVideoProtocolConfig({});
     const profile = resolveVideoProtocolProfile(config, 'openai', 'sora-2');
     const imageBuffer = await sharp({
@@ -144,14 +144,14 @@ describe('视频协议能力配置', () => {
     const validFiles = { ...emptyFiles, images: [{ mimeType: 'image/png', buffer: imageBuffer }] };
 
     await expect(validateVideoProtocolReferences(profile, { size: '4x2' }, validFiles)).resolves.toBeUndefined();
-    await expect(validateVideoProtocolReferences(profile, { size: '2x4' }, validFiles)).rejects.toThrow('参考图尺寸必须与视频尺寸一致');
+    await expect(validateVideoProtocolReferences(profile, { size: '2x4' }, validFiles)).resolves.toBeUndefined();
     const mismatchedImageBuffer = await sharp({
       create: { width: 2, height: 4, channels: 3, background: '#000000' },
     }).png().toBuffer();
     await expect(validateVideoProtocolReferences(profile, { size: '4x2' }, {
       ...emptyFiles,
       images: [validFiles.images[0], { mimeType: 'image/png', buffer: mismatchedImageBuffer }],
-    })).rejects.toThrow('第 2 张参考图尺寸必须与视频尺寸一致');
+    })).resolves.toBeUndefined();
     await expect(validateVideoProtocolReferences(profile, { size: '4x2' }, {
       ...emptyFiles,
       images: [{ mimeType: 'image/gif', buffer: imageBuffer }],

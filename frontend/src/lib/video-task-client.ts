@@ -22,6 +22,33 @@ export interface CreateVideoTaskInput {
   referenceImages: File[];
   referenceVideos: File[];
   referenceAudios: File[];
+  promptVariants?: string[];
+}
+
+/**
+ * 构建视频任务 multipart 请求体。
+ * @param input 模型、提示词、视频参数和参考附件。
+ * @param parallelCount 本次需要创建的独立视频任务数量。
+ * @returns 可直接提交给视频任务端点的表单数据。
+ */
+function buildVideoTaskFormData(input: CreateVideoTaskInput, parallelCount: number): FormData {
+  const formData = new FormData();
+  formData.set('apiKey', input.model.apiKey);
+  formData.set('baseUrl', input.model.baseUrl);
+  formData.set('protocol', input.model.protocol);
+  formData.set('model', getResolvedVideoModelId(input.model));
+  formData.set('modelName', input.model.name);
+  formData.set('prompt', input.prompt);
+  formData.set('resolution', String(input.resolution));
+  formData.set('size', input.size);
+  formData.set('aspectRatio', input.aspectRatio);
+  formData.set('seconds', String(input.seconds));
+  formData.set('parallelCount', String(parallelCount));
+  formData.set('promptVariants', JSON.stringify(input.promptVariants || []));
+  input.referenceImages.forEach(file => formData.append('reference_images', file, file.name));
+  input.referenceVideos.forEach(file => formData.append('reference_videos', file, file.name));
+  input.referenceAudios.forEach(file => formData.append('reference_audios', file, file.name));
+  return formData;
 }
 
 /**
@@ -40,25 +67,27 @@ async function throwVideoTaskError(response: Response): Promise<never> {
  * @returns 后端创建的视频任务快照，包含任务标识、服务端创建时间和初始耗时。
  */
 export async function createVideoTask(input: CreateVideoTaskInput): Promise<VideoTaskResponse> {
-  const formData = new FormData();
-  formData.set('apiKey', input.model.apiKey);
-  formData.set('baseUrl', input.model.baseUrl);
-  formData.set('protocol', input.model.protocol);
-  formData.set('model', getResolvedVideoModelId(input.model));
-  formData.set('modelName', input.model.name);
-  formData.set('prompt', input.prompt);
-  formData.set('resolution', String(input.resolution));
-  formData.set('size', input.size);
-  formData.set('aspectRatio', input.aspectRatio);
-  formData.set('seconds', String(input.seconds));
-  input.referenceImages.forEach(file => formData.append('reference_images', file, file.name));
-  input.referenceVideos.forEach(file => formData.append('reference_videos', file, file.name));
-  input.referenceAudios.forEach(file => formData.append('reference_audios', file, file.name));
-  const response = await fetch('/api/flyreq/video-tasks', { method: 'POST', body: formData });
+  const response = await fetch('/api/flyreq/video-tasks', { method: 'POST', body: buildVideoTaskFormData(input, 1) });
   if (!response.ok) return throwVideoTaskError(response);
   const data = await response.json() as VideoTaskResponse;
   if (!data.id) throw new Error('后端未返回视频任务 ID');
   return data;
+}
+
+/**
+ * 原子创建一组参数相同的独立视频生成任务。
+ * @param input 模型、提示词、视频参数和参考附件。
+ * @param parallelCount 需要创建的视频任务数量，范围为 1 至 20。
+ * @returns 按批次序号排列的视频任务初始快照。
+ */
+export async function createVideoTasks(input: CreateVideoTaskInput, parallelCount: number): Promise<VideoTaskResponse[]> {
+  const response = await fetch('/api/flyreq/video-tasks', { method: 'POST', body: buildVideoTaskFormData(input, parallelCount) });
+  if (!response.ok) return throwVideoTaskError(response);
+  const data = await response.json() as { tasks?: VideoTaskResponse[] };
+  if (!Array.isArray(data.tasks) || data.tasks.length !== parallelCount || data.tasks.some(task => !task.id)) {
+    throw new Error('后端未返回完整的视频任务列表');
+  }
+  return data.tasks;
 }
 
 /**

@@ -681,7 +681,7 @@ docker push ghcr.io/doudou770/flyreq-image-studio:latest
 | 协议 | 官方核对结果 | 配置约束来源 |
 | --- | --- | --- |
 | [New API 通用视频](https://www.newapi.ai/zh/docs/api/ai-model/videos/createvideogeneration) | 使用 `POST /v1/video/generations`、`GET /v1/video/generations/{task_id}`，请求字段为 `model`、`prompt`、`image`、`duration`、`width`、`height` | 官方未定义跨上游模型统一的时长和尺寸上限，因此配置标记为 `workspace-default`；内置 1-60 秒和尺寸列表是工作台默认边界，可用环境变量覆盖 |
-| [OpenAI Videos（Sora）](https://developers.openai.com/api/docs/guides/video-generation) | 使用 `POST /v1/videos`、`GET /v1/videos/{video_id}`、`GET /v1/videos/{video_id}/content`；支持 Sora 官方时长/尺寸，参考图采用 `input_reference` | `official`；后端额外校验 JPEG/PNG/WebP 参考图的像素尺寸必须与 `size` 完全一致 |
+| [OpenAI Videos（Sora）](https://developers.openai.com/api/docs/guides/video-generation) | 使用 `POST /v1/videos`、`GET /v1/videos/{video_id}`、`GET /v1/videos/{video_id}/content`；支持 Sora 官方时长/尺寸，参考图采用 `input_reference` | `official`；后端校验 JPEG/PNG/WebP 格式、文件大小和数量，不限制参考素材像素尺寸 |
 | [xAI Videos](https://docs.x.ai/developers/model-capabilities/video/generation) | 使用 `POST /v1/videos/generations`、`GET /v1/videos/{request_id}`；时长 1-15 秒，支持官方宽高比与 480p/720p，1.5 模型图生视频支持 1080p | `official`；图生视频的 `image` 按官方要求发送 URL、data URI 或 `file_id` 字符串，不包装为对象 |
 
 部署差异必须通过 `FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES` 配置。例如，把 xAI 的页面预设时长替换为 3、6、9 秒：

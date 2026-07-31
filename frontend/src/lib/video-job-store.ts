@@ -9,8 +9,16 @@ export interface VideoReferenceMetadata {
 export interface StoredVideoJob {
   id: string;
   serverTaskId?: string;
+  /** 同一次批量提交的本地分组标识。 */
+  batchId?: string;
+  /** 当前视频在批量提交中的从零开始序号。 */
+  batchIndex?: number;
   status: '排队中' | 'processing' | 'completed' | 'failed' | 'cancelled';
   prompt: string;
+  /** 当前视频在批量提交中使用的附加提示词。 */
+  promptVariant?: string;
+  /** 当前视频实际发送给上游的完整提示词。 */
+  effectivePrompt?: string;
   modelId: string;
   modelName?: string;
   apiModelId?: string;

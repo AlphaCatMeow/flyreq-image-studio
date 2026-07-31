@@ -55,10 +55,81 @@ describe('VideoGenerationWorkspace', () => {
     expect(screen.getAllByText('0 / 3')).toHaveLength(2);
     expect(screen.getByRole('button', { name: '4K' })).toBeInTheDocument();
     expect(screen.getByTestId('video-resolution-icon')).toBeInTheDocument();
-    expect(screen.getByTestId('video-parameter-grid')).toHaveClass('md:grid-cols-3');
+    expect(screen.getByTestId('video-parameter-grid')).toHaveClass('md:grid-cols-4');
+    expect(within(screen.getByTestId('video-parameter-grid')).getByRole('button', { name: 'Video count' })).toBeInTheDocument();
     expect(screen.getByLabelText('Submission shortcut')).toBeInTheDocument();
     expect(screen.getByTitle('Configure the default text model first')).toBeDisabled();
     expect(screen.getByTitle('Generate video')).toBeDisabled();
+  });
+
+  it('粘贴媒体文件时将其加入视频参考素材', async () => {
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    const image = new File(['image'], 'pasted-reference.png', { type: 'image/png' });
+    const prompt = screen.getByPlaceholderText('Describe the scene, motion, camera, pacing, and sound you want…');
+    fireEvent.paste(prompt, {
+      clipboardData: {
+        items: [{ kind: 'file', type: image.type, getAsFile: () => image }],
+      },
+    });
+
+    expect(await screen.findByAltText('pasted-reference.png')).toBeInTheDocument();
+    expect(screen.getByTitle('看大图')).toBeInTheDocument();
+    expect(screen.getByTitle('添加到素材库')).toBeInTheDocument();
+    expect(screen.getByTitle('复制图片')).toBeInTheDocument();
+  });
+
+  it('一次请求批量创建指定数量的视频任务并展示独立历史卡片', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        taskIds: ['video-task-1', 'video-task-2', 'video-task-3'],
+        tasks: [
+          { id: 'video-task-1', status: 'queued', createdAt: '2026-07-30T08:00:00.000Z' },
+          { id: 'video-task-2', status: 'queued', createdAt: '2026-07-30T08:00:00.000Z' },
+          { id: 'video-task-3', status: 'queued', createdAt: '2026-07-30T08:00:00.000Z' },
+        ],
+      }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Video count' }));
+    fireEvent.click(await screen.findByRole('button', { name: '3' }));
+    fireEvent.change(screen.getByPlaceholderText('Additional instruction for video 1 (optional)'), { target: { value: 'Use a wide establishing shot' } });
+    fireEvent.change(screen.getByPlaceholderText('Additional instruction for video 2 (optional)'), { target: { value: 'Use a close-up shot' } });
+    fireEvent.change(screen.getByPlaceholderText('Additional instruction for video 3 (optional)'), { target: { value: 'Use an overhead shot' } });
+    fireEvent.change(screen.getByPlaceholderText('Describe the scene, motion, camera, pacing, and sound you want…'), { target: { value: 'Three cinematic draws' } });
+    fireEvent.click(screen.getByTitle('Generate video'));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(request.method).toBe('POST');
+    expect(request.body).toBeInstanceOf(FormData);
+    expect((request.body as FormData).get('parallelCount')).toBe('3');
+    expect(JSON.parse(String((request.body as FormData).get('promptVariants')))).toEqual([
+      'Use a wide establishing shot',
+      'Use a close-up shot',
+      'Use an overhead shot',
+    ]);
+    expect(await screen.findByText('Video 3')).toBeInTheDocument();
+    expect(screen.getByText('Video 2')).toBeInTheDocument();
+    expect(screen.getByText('Video 1')).toBeInTheDocument();
+    expect(screen.getByText('video-task-3')).toBeInTheDocument();
+    expect(screen.getByText('video-task-2')).toBeInTheDocument();
+    expect(screen.getByText('video-task-1')).toBeInTheDocument();
+    expect(screen.getByText(/Use a wide establishing shot/)).toBeInTheDocument();
+    expect(screen.getByText(/Use a close-up shot/)).toBeInTheDocument();
+    expect(screen.getByText(/Use an overhead shot/)).toBeInTheDocument();
   });
 
   it('补齐旧后端缺失的参考视频和音频类型配置', () => {
@@ -429,6 +500,11 @@ describe('VideoGenerationWorkspace', () => {
     expect(squarePreview).toHaveStyle({ width: '36px', height: '36px' });
     expect(screen.getAllByText('Landscape').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Portrait').length).toBeGreaterThan(0);
+    expect(screen.getByText('Aspect ratio')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '16:9' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '9:16' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '9:16' }));
+    expect(screen.getByRole('button', { name: '720x1280' })).toBeInTheDocument();
   });
 
   it('shows xAI resolution and aspect-ratio controls without a size control', () => {
