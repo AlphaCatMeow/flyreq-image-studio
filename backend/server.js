@@ -1465,6 +1465,37 @@ function readVideoMultipartBody(req) {
 }
 
 /**
+ * 解析并规范化逐视频附加提示词。
+ * @param rawValue multipart 表单中的 JSON 数组文本。
+ * @param parallelCount 本次批量创建的视频任务数量。
+ * @returns 与任务数量对应且已去除首尾空白的附加提示词数组。
+ */
+function parseVideoPromptVariants(rawValue, parallelCount) {
+  if (!rawValue) return [];
+  let parsed;
+  try {
+    parsed = JSON.parse(String(rawValue));
+  } catch {
+    throw new Error('逐视频提示词格式无效');
+  }
+  if (!Array.isArray(parsed)) throw new Error('逐视频提示词格式无效');
+  return parsed.slice(0, parallelCount).map(item => typeof item === 'string' ? item.trim() : '');
+}
+
+/**
+ * 组合单个视频实际发送给上游的完整提示词。
+ * @param prompt 批量任务共享的主提示词。
+ * @param promptVariant 当前视频的可选附加提示词。
+ * @returns 包含当前视频附加要求的完整提示词。
+ */
+function composeEffectiveVideoPrompt(prompt, promptVariant) {
+  const normalizedPrompt = String(prompt || '').trim();
+  const normalizedVariant = String(promptVariant || '').trim();
+  if (!normalizedVariant) return normalizedPrompt;
+  return normalizedPrompt ? `${normalizedPrompt}\n\n本个视频要求：\n${normalizedVariant}` : normalizedVariant;
+}
+
+/**
  * 校验并规范化视频任务字段。
  * @param fields multipart 表单中的文本字段。
  * @param files 已解析的参考附件。
@@ -1476,6 +1507,7 @@ async function normalizeVideoTaskPayload(fields, files) {
   const seconds = Number(fields.seconds);
   const size = String(fields.size || '').trim().toLowerCase();
   const aspectRatio = String(fields.aspectRatio || '').trim();
+  const parallelCount = Number(fields.parallelCount || 1);
   const rawProtocol = String(fields.protocol || '').trim();
   const protocol = rawProtocol || 'legacy-openai-video';
   if (!String(fields.apiKey || '').trim()) throw new Error('缺少 API 密钥');
@@ -1485,6 +1517,8 @@ async function normalizeVideoTaskPayload(fields, files) {
   if (!isVideoProtocol(protocol)) throw new Error('视频协议无效');
   if (!Number.isInteger(resolution) || resolution < 144 || resolution > 4320) throw new Error('清晰度必须为 144 至 4320 的整数');
   if (!Number.isInteger(seconds)) throw new Error('视频时长必须为整数');
+  if (!Number.isInteger(parallelCount) || parallelCount < 1 || parallelCount > MAX_PARALLEL_COUNT) throw new Error('并发数量无效');
+  const promptVariants = parseVideoPromptVariants(fields.promptVariants, parallelCount);
   if (size !== 'auto') {
     const match = size.match(/^(\d+)x(\d+)$/);
     const width = Number(match?.[1]);
@@ -1505,7 +1539,8 @@ async function normalizeVideoTaskPayload(fields, files) {
     size,
     aspectRatio,
     seconds,
-    parallelCount: 1,
+    parallelCount,
+    promptVariants,
     references: {
       videos: files.videos.map(file => ({ name: file.filename, mimeType: file.mimeType, size: file.size })),
       audios: files.audios.map(file => ({ name: file.filename, mimeType: file.mimeType, size: file.size })),
@@ -2381,6 +2416,48 @@ function createVideoTask(payload, files, req) {
   broadcastQueueStatus();
   drainVideoQueue();
   return taskId;
+}
+
+/**
+ * 原子创建一组独立视频任务，并在全部数据库记录写入成功后统一入队。
+ * @param payload 已规范化的视频任务参数，parallelCount 表示任务数量。
+ * @param files 已校验且由本批任务共享的只读参考附件。
+ * @param req 原始请求，用于限流来源识别。
+ * @returns 按批次序号排列的新建视频任务标识列表。
+ */
+function createVideoTaskBatch(payload, files, req) {
+  const limitConfig = getLimitConfig();
+  if (isRejectNewTasksEnabled()) throw createHttpError(503, 'SERVER_NOT_ACCEPTING_TASKS', LIMIT_ERROR_MESSAGES.notAcceptingTasks, limitConfig.retryAfterSeconds);
+  const source = enforceRateLimit(req, payload, limitConfig);
+  enforceQueueCapacity(source, limitConfig, payload.parallelCount, payload.parallelCount);
+
+  const now = new Date().toISOString();
+  const tasks = Array.from({ length: payload.parallelCount }, (_, index) => {
+    const promptVariant = payload.promptVariants[index] || '';
+    const requestForDb = {
+      ...payload,
+      prompt: composeEffectiveVideoPrompt(payload.prompt, promptVariant),
+      parallelCount: 1,
+      promptVariants: promptVariant ? [promptVariant] : [],
+    };
+    delete requestForDb.apiKey;
+    return { taskId: randomUUID(), requestForDb };
+  });
+  const insertTasks = db.transaction(() => {
+    const insertTask = db.prepare(`INSERT INTO tasks (id, status, mode, request_json, created_at) VALUES (?, ?, ?, ?, ?)`);
+    for (const task of tasks) {
+      insertTask.run(task.taskId, TASK_STATUS.QUEUED, 'video-generation', JSON.stringify(task.requestForDb), now);
+    }
+  });
+  insertTasks();
+
+  for (const task of tasks) {
+    registerVideoTaskRuntimeState(task.taskId, payload, files, source);
+    broadcastTask(task.taskId);
+  }
+  broadcastQueueStatus();
+  drainVideoQueue();
+  return tasks.map(task => task.taskId);
 }
 
 /**
@@ -3288,6 +3365,13 @@ async function handleApi(req, res, pathname) {
     if (req.method === 'POST' && apiPathname === '/api/flyreq/video-tasks') {
       const { fields, files } = await readVideoMultipartBody(req);
       const payload = await normalizeVideoTaskPayload(fields, files);
+      if (payload.parallelCount > 1) {
+        const taskIds = createVideoTaskBatch(payload, files, req);
+        const selectTask = db.prepare('SELECT * FROM tasks WHERE id = ? AND mode = ?');
+        const tasks = taskIds.map(taskId => serializeTask(selectTask.get(taskId, 'video-generation')));
+        sendJson(res, 202, { taskIds, tasks });
+        return true;
+      }
       const taskId = createVideoTask(payload, files, req);
       const task = serializeTask(db.prepare('SELECT * FROM tasks WHERE id = ? AND mode = ?').get(taskId, 'video-generation'));
       sendJson(res, 202, { ...task, taskId });

@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowUp, Check, CircleStop, Clock3, CloudUpload, Download, FileAudio, FileImage, FileVideo, Images, Info, Loader2, Maximize, RefreshCw, ScanLine, Sparkles, Trash2, Video, X } from 'lucide-react';
+import { ArrowUp, Check, ChevronDown, CircleStop, Clock3, CloudUpload, Copy, Download, FileAudio, FileImage, FileVideo, Images, Info, Loader2, Maximize, RefreshCw, ScanLine, Sparkles, Trash2, Video, X } from 'lucide-react';
 import { useI18n } from '@/components/LanguageProvider';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,12 +9,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Textarea } from '@/components/ui/textarea';
 import { Select } from '@/components/ui/select';
 import { AgentAssetPickerDialog } from '@/components/agent/AgentAssetPickerDialog';
+import { AttachmentChips } from '@/components/AttachmentChips';
 import { PromptOptimizeDialog } from '@/components/PromptOptimizeDialog';
 import { PromptSubmissionShortcutMenu } from '@/components/PromptSubmissionShortcutMenu';
 import { usePromptOptimizeSetting } from '@/hooks/usePromptOptimizeSetting';
 import { usePromptSubmissionShortcut } from '@/hooks/usePromptSubmissionShortcut';
 import { getCompleteVideoModels, getDefaultVideoModel, getResolvedVideoModelId, loadRegistry, updateRegistryDefaults, type VideoModelConfig } from '@/lib/flyreq-models';
-import { acknowledgeVideoTask, cancelVideoTask, createVideoTask, getVideoTask } from '@/lib/video-task-client';
+import { acknowledgeVideoTask, cancelVideoTask, createVideoTask, createVideoTasks, getVideoTask } from '@/lib/video-task-client';
 import {
   cacheVideoBlob,
   deleteVideoBlob,
@@ -29,6 +30,8 @@ import { requireDefaultConfiguredTextModel } from '@/lib/model-endpoints';
 import { streamPromptOptimize, type StreamPromptOptimizeHandle } from '@/lib/prompt-optimize-client';
 import { getAssetBlob, type ImageAsset } from '@/lib/asset-store';
 import { cn } from '@/lib/utils';
+import { MAX_PARALLEL_COUNT, PARALLEL_COUNT_OPTIONS, type ParallelCount } from '@/lib/model-capabilities';
+import { composeEffectiveVideoPrompt } from '@/lib/video-prompt-variants';
 
 interface VideoGenerationWorkspaceProps {
   wideMode?: boolean;
@@ -39,6 +42,12 @@ interface VideoGenerationWorkspaceProps {
 interface MediaAttachmentTileProps {
   file: File;
   onRemove: () => void;
+}
+
+interface VideoReferenceImageChipsProps {
+  files: File[];
+  onRemove: (id: string) => void;
+  prompt: string;
 }
 
 interface VideoSizePreviewProps {
@@ -80,6 +89,27 @@ function getVideoSizeDisplayName(size: string, t: ReturnType<typeof useI18n>['t'
   if (width / height >= 2) return t('aspectRatio.panorama');
   if (height / width >= 2) return t('aspectRatio.tallPortrait');
   return width > height ? t('aspectRatio.landscape') : t('aspectRatio.portrait');
+}
+
+/**
+ * 将具体视频尺寸约分为可展示的宽高比。
+ * @param size 视频尺寸，格式为“宽x高”。
+ * @returns 约分后的“宽:高”比例；尺寸无效或为自动时返回空字符串。
+ */
+function getVideoSizeAspectRatio(size: string): string {
+  const match = size.match(/^(\d+)x(\d+)$/i);
+  if (!match) return '';
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) return '';
+  let left = width;
+  let right = height;
+  while (right !== 0) {
+    const remainder = left % right;
+    left = right;
+    right = remainder;
+  }
+  return `${width / left}:${height / left}`;
 }
 
 /**
@@ -179,6 +209,40 @@ function MediaAttachmentTile({ file, onRemove }: MediaAttachmentTileProps) {
 }
 
 /**
+ * 将视频参考图片适配到工作台统一的图片附件交互模块。
+ * @param props 参考图片列表、删除回调和当前提示词。
+ * @returns 复用生图工作台能力的图片缩略图、预览、复制及素材库操作区域。
+ */
+function VideoReferenceImageChips({ files, onRemove, prompt }: VideoReferenceImageChipsProps) {
+  const [attachmentFiles, setAttachmentFiles] = useState<Array<{ id: string; name: string; preview: string; dataUrl: string; mimeType: string }>>([]);
+
+  useEffect(() => {
+    const nextFiles = files.map(file => {
+      const preview = URL.createObjectURL(file);
+      return { id: `${file.name}-${file.lastModified}`, name: file.name, preview, dataUrl: preview, mimeType: file.type };
+    });
+    setAttachmentFiles(nextFiles);
+    return () => {
+      for (const file of nextFiles) URL.revokeObjectURL(file.preview);
+    };
+  }, [files]);
+
+  return (
+    <AttachmentChips
+      files={attachmentFiles}
+      onRemove={onRemove}
+      sourceKind="upload"
+      sourceLabel="视频参考图片"
+      prompt={prompt}
+      showDownload={false}
+      showCopy
+      showAddToAssets
+      showUseAsReference={false}
+    />
+  );
+}
+
+/**
  * 将任务时间转换为当前语言环境的短日期时间。
  * @param value ISO 时间文本。
  * @param locale 当前界面语言。
@@ -262,6 +326,10 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const [customHeight, setCustomHeight] = useState('');
   const [sizeMode, setSizeMode] = useState<'preset' | 'custom' | 'reference'>('preset');
   const [seconds, setSeconds] = useState(config.durations[0] || 6);
+  const [parallelCount, setParallelCount] = useState<ParallelCount>(1);
+  const [parallelPopoverOpen, setParallelPopoverOpen] = useState(false);
+  const [promptVariants, setPromptVariants] = useState<string[]>([]);
+  const [promptVariantsOpen, setPromptVariantsOpen] = useState(false);
   const [customSeconds, setCustomSeconds] = useState('');
   const [durationMode, setDurationMode] = useState<'preset' | 'custom'>('preset');
   const [jobs, setJobs] = useState<StoredVideoJob[]>(() => loadVideoJobs());
@@ -273,6 +341,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const [optimizedText, setOptimizedText] = useState('');
   const [optimizing, setOptimizing] = useState(false);
   const [optimizeError, setOptimizeError] = useState<string | null>(null);
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
   const optimizeHandleRef = useRef<StreamPromptOptimizeHandle | null>(null);
   const jobsRef = useRef(jobs);
   const { enabled: promptOptimizeEnabled, available: promptOptimizeAvailable } = usePromptOptimizeSetting();
@@ -296,6 +365,36 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     setModelId(nextModelId);
     updateRegistryDefaults({ videoGeneration: nextModelId });
   };
+
+  /**
+   * 更新批量视频数量，并同步逐视频附加提示词区域的可见状态。
+   * @param count 用户选择的独立视频任务数量。
+   * @returns 无返回值；数量为一时清空逐视频附加提示词。
+   */
+  const handleParallelCountChange = useCallback((count: ParallelCount): void => {
+    setParallelCount(count);
+    setParallelPopoverOpen(false);
+    if (count > 1) {
+      setPromptVariantsOpen(true);
+    } else {
+      setPromptVariants([]);
+      setPromptVariantsOpen(false);
+    }
+  }, []);
+
+  /**
+   * 更新指定视频的附加提示词，并保留当前最大批量数量范围内的数据。
+   * @param index 当前视频在批次中的从零开始序号。
+   * @param value 用户输入的附加提示词。
+   * @returns 无返回值；对应输入值会写入组件状态。
+   */
+  const handlePromptVariantChange = useCallback((index: number, value: string): void => {
+    setPromptVariants(current => {
+      const next = current.slice(0, MAX_PARALLEL_COUNT);
+      next[index] = value;
+      return next;
+    });
+  }, []);
   const protocolProfile = useMemo(
     () => resolveVideoProtocolProfile(selectedModel?.protocol || 'new-api', selectedModel ? getResolvedVideoModelId(selectedModel) : '', referenceImages.length > 0),
     [referenceImages.length, selectedModel],
@@ -493,6 +592,29 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     });
   }, [config.maxReferenceAudioBytes, config.maxReferenceImageBytes, config.maxReferenceVideoBytes, maxReferenceAudios, maxReferenceImages, maxReferenceVideos, protocolProfile.references.audioMimeTypes, protocolProfile.references.imageMimeTypes, protocolProfile.references.videoMimeTypes, showToast, t]);
 
+  useEffect(() => {
+    /**
+     * 接收视频工作台范围内粘贴的媒体文件，并复用统一的参考素材校验入口。
+     * @param event 浏览器派发的剪贴板粘贴事件。
+     * @returns 无返回值；剪贴板不含媒体文件时保留浏览器默认粘贴行为。
+     */
+    const handlePaste = (event: ClipboardEvent): void => {
+      const target = event.target;
+      if (!(target instanceof Node) || !workspaceRef.current?.contains(target)) return;
+      const items = event.clipboardData?.items;
+      if (!items) return;
+      const mediaFiles = Array.from(items)
+        .filter(item => item.kind === 'file' && /^(image|video|audio)\//.test(item.type))
+        .map(item => item.getAsFile())
+        .filter((file): file is File => Boolean(file));
+      if (mediaFiles.length === 0) return;
+      event.preventDefault();
+      addReferenceFiles(mediaFiles);
+    };
+    document.addEventListener('paste', handlePaste);
+    return () => document.removeEventListener('paste', handlePaste);
+  }, [addReferenceFiles]);
+
   /**
    * 将素材库图片转换为参考图文件并追加到上传列表。
    * @param selectedAssets 用户在素材库中确认的图片素材。
@@ -533,6 +655,10 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     ? activeResolution
     : (resolutionCapability.values[0] || activeResolution);
   const sizeCapability = protocolProfile.parameters.size;
+  const sizeAspectRatioOptions = useMemo(
+    () => Array.from(new Set(sizeCapability.values.map(getVideoSizeAspectRatio).filter(Boolean))),
+    [sizeCapability.values],
+  );
   const activeVideoSize = sizeMode === 'custom'
     ? `${customWidth}x${customHeight}`
     : sizeMode === 'reference'
@@ -541,6 +667,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const activeAspectRatio = protocolProfile.parameters.aspectRatio.values.includes(aspectRatio)
     ? aspectRatio
     : (protocolProfile.parameters.aspectRatio.values[0] || '');
+  const activeSizeAspectRatio = getVideoSizeAspectRatio(activeVideoSize);
   const activeSeconds = durationMode === 'custom'
     ? Number(customSeconds)
     : (durationOptions.includes(seconds) ? seconds : durationOptions[0]);
@@ -557,6 +684,14 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const activeReferenceImagesValid = activeReferenceImageCountValid && activeReferenceImageMimeTypesValid;
   const activeReferenceVideosValid = referenceVideos.length <= maxReferenceVideos && referenceVideos.every(file => isAllowedVideoReferenceMimeType(file.type, protocolProfile.references.videoMimeTypes));
   const activeReferenceAudiosValid = referenceAudios.length <= maxReferenceAudios && referenceAudios.every(file => isAllowedVideoReferenceMimeType(file.type, protocolProfile.references.audioMimeTypes));
+  const activePromptVariants = useMemo(
+    () => Array.from({ length: parallelCount }, (_, index) => promptVariants[index] || ''),
+    [parallelCount, promptVariants],
+  );
+  const submitPromptVariants = useMemo(() => {
+    const values = activePromptVariants.map(item => item.trim());
+    return values.some(Boolean) ? values : undefined;
+  }, [activePromptVariants]);
 
   /**
    * 校验表单并创建视频任务。
@@ -572,10 +707,16 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     if (!activeReferenceImageMimeTypesValid) { showToast(t('video.unsupportedReferenceImageFormat'), 'error'); return; }
     if (!activeReferenceVideosValid) { showToast(t('video.unsupportedReferenceVideo'), 'error'); return; }
     if (!activeReferenceAudiosValid) { showToast(t('video.unsupportedReferenceAudio'), 'error'); return; }
-    const job: StoredVideoJob = {
+    const batchId = parallelCount > 1 ? generateModelId('video_batch') : undefined;
+    const batchCreatedAt = new Date().toISOString();
+    const batchJobs: StoredVideoJob[] = Array.from({ length: parallelCount }, (_, batchIndex) => ({
       id: generateModelId('video_job'),
+      batchId,
+      batchIndex: batchId ? batchIndex : undefined,
       status: '排队中',
       prompt: prompt.trim(),
+      promptVariant: submitPromptVariants?.[batchIndex],
+      effectivePrompt: composeEffectiveVideoPrompt(prompt, submitPromptVariants?.[batchIndex]),
       modelId: selectedModel.id,
       modelName: selectedModel.name,
       apiModelId: getResolvedVideoModelId(selectedModel),
@@ -587,24 +728,32 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
       referenceVideos: referenceVideos.map(file => ({ name: file.name, type: file.type, size: file.size })),
       referenceAudios: referenceAudios.map(file => ({ name: file.name, type: file.type, size: file.size })),
       referenceImages: referenceImages.map(file => ({ name: file.name, type: file.type, size: file.size })),
-      createdAt: new Date().toISOString(),
-    };
-    setJobs(current => [job, ...current]);
+      createdAt: batchCreatedAt,
+    }));
+    setJobs(current => [...batchJobs].reverse().concat(current));
     setSubmitting(true);
     try {
-      const task = await createVideoTask({ model: selectedModel, prompt: job.prompt, resolution: activeProtocolResolution, size: activeVideoSize, aspectRatio: activeAspectRatio, seconds: activeSeconds, referenceImages, referenceVideos, referenceAudios });
-      setJobs(current => current.map(item => item.id === job.id ? { ...item, serverTaskId: task.id, createdAt: task.createdAt || item.createdAt, durationMs: task.durationMs || 0, durationUpdatedAt: new Date().toISOString() } : item));
+      const input = { model: selectedModel, prompt: prompt.trim(), resolution: activeProtocolResolution, size: activeVideoSize, aspectRatio: activeAspectRatio, seconds: activeSeconds, referenceImages, referenceVideos, referenceAudios, promptVariants: submitPromptVariants };
+      const tasks = parallelCount > 1 ? await createVideoTasks(input, parallelCount) : [await createVideoTask(input)];
+      const taskByJobId = new Map(batchJobs.map((job, index) => [job.id, tasks[index]]));
+      setJobs(current => current.map(item => {
+        const task = taskByJobId.get(item.id);
+        return task ? { ...item, serverTaskId: task.id, createdAt: task.createdAt || item.createdAt, durationMs: task.durationMs || 0, durationUpdatedAt: new Date().toISOString() } : item;
+      }));
       setReferenceImages([]);
       setReferenceVideos([]);
       setReferenceAudios([]);
+      setPromptVariants([]);
+      setPromptVariantsOpen(false);
     } catch (error) {
       const message = error instanceof Error ? error.message : t('video.failed');
-      setJobs(current => current.map(item => item.id === job.id ? { ...item, status: 'failed', completedAt: new Date().toISOString(), error: message } : item));
+      const failedJobIds = new Set(batchJobs.map(job => job.id));
+      setJobs(current => current.map(item => failedJobIds.has(item.id) ? { ...item, status: 'failed', completedAt: new Date().toISOString(), error: message } : item));
       showToast(message, 'error');
     } finally {
       setSubmitting(false);
     }
-  }, [activeAspectRatio, activeAspectRatioValid, activeDurationValid, activeProtocolResolution, activeReferenceAudiosValid, activeReferenceImageCountValid, activeReferenceImageMimeTypesValid, activeReferenceVideosValid, activeResolutionValid, activeSeconds, activeVideoSize, activeVideoSizeValid, maxReferenceImages, onConfigureApiKey, prompt, referenceAudios, referenceImages, referenceVideos, selectedModel, showToast, t]);
+  }, [activeAspectRatio, activeAspectRatioValid, activeDurationValid, activeProtocolResolution, activeReferenceAudiosValid, activeReferenceImageCountValid, activeReferenceImageMimeTypesValid, activeReferenceVideosValid, activeResolutionValid, activeSeconds, activeVideoSize, activeVideoSizeValid, maxReferenceImages, onConfigureApiKey, parallelCount, prompt, referenceAudios, referenceImages, referenceVideos, selectedModel, showToast, submitPromptVariants, t]);
 
   /**
    * 使用默认文本模型流式优化当前视频提示词。
@@ -723,12 +872,15 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const restoreJob = useCallback((job: StoredVideoJob) => {
     const restoredModel = models.find(model => model.id === job.modelId);
     const restoredProfile = resolveVideoProtocolProfile(restoredModel?.protocol || 'new-api', restoredModel ? getResolvedVideoModelId(restoredModel) : '', false);
-    setPrompt(job.prompt);
+    setPrompt(job.effectivePrompt || job.prompt);
     setModelId(job.modelId);
     setResolution(job.resolution);
     setVideoSize(job.videoSize);
     setAspectRatio(job.aspectRatio || '16:9');
     setSeconds(job.seconds);
+    setParallelCount(1);
+    setPromptVariants([]);
+    setPromptVariantsOpen(false);
     const resolutionIsPreset = restoredProfile.parameters.resolution.values.includes(job.resolution);
     setResolutionMode(resolutionIsPreset ? 'preset' : 'custom');
     if (!resolutionIsPreset) setCustomResolution(String(job.resolution));
@@ -751,10 +903,12 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     setReferenceImages([]);
     setReferenceVideos([]);
     setReferenceAudios([]);
+    setPromptVariants([]);
+    setPromptVariantsOpen(false);
   }, []);
 
   const parameterButton = 'h-7 shrink-0 rounded-md border border-input bg-background px-2.5 text-xs transition-colors hover:bg-muted';
-  const canClear = Boolean(prompt.trim() || referenceImages.length || referenceVideos.length || referenceAudios.length);
+  const canClear = Boolean(prompt.trim() || activePromptVariants.some(value => value.trim()) || referenceImages.length || referenceVideos.length || referenceAudios.length);
   const canSubmit = Boolean(
     prompt.trim()
     && modelId
@@ -769,7 +923,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   );
 
   return (
-    <div className={cn('grid min-h-0 gap-5', wideMode && 'xl:h-full xl:grid-cols-[minmax(460px,0.95fr)_minmax(0,1.35fr)]')}>
+    <div ref={workspaceRef} className={cn('grid min-h-0 gap-5', wideMode && 'xl:h-full xl:grid-cols-[minmax(460px,0.95fr)_minmax(0,1.35fr)]')}>
       <section className={cn('space-y-4', wideMode && 'xl:overflow-y-auto xl:pr-1')}>
         <div className="space-y-1">
           <div className="flex items-center gap-2"><Video className="size-5 text-primary" /><h2 className="text-lg font-semibold">{t('video.title')}</h2></div>
@@ -815,7 +969,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
               </div>
               {(referenceImages.length > 0 || referenceVideos.length > 0 || referenceAudios.length > 0) && (
                 <div className="flex flex-wrap gap-2 px-4 pb-2">
-                  {referenceImages.map((file, index) => <MediaAttachmentTile key={`image-${file.name}-${file.lastModified}`} file={file} onRemove={() => setReferenceImages(current => current.filter((_, itemIndex) => itemIndex !== index))} />)}
+                  {referenceImages.length > 0 && <VideoReferenceImageChips files={referenceImages} prompt={prompt} onRemove={id => setReferenceImages(current => current.filter(file => `${file.name}-${file.lastModified}` !== id))} />}
                   {referenceVideos.map((file, index) => <MediaAttachmentTile key={`video-${file.name}-${file.lastModified}`} file={file} onRemove={() => setReferenceVideos(current => current.filter((_, itemIndex) => itemIndex !== index))} />)}
                   {referenceAudios.map((file, index) => <MediaAttachmentTile key={`audio-${file.name}-${file.lastModified}`} file={file} onRemove={() => setReferenceAudios(current => current.filter((_, itemIndex) => itemIndex !== index))} />)}
                 </div>
@@ -826,7 +980,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
                   <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />
                   <Select className="w-full sm:w-44" size="sm" value={modelId} onValueChange={handleModelChange} options={models.map(model => ({ value: model.id, label: model.name }))} placeholder={t('common.notConfigured')} />
                 </div>
-                <div data-testid="video-parameter-grid" className="grid gap-x-4 gap-y-3 md:grid-cols-3">
+                <div data-testid="video-parameter-grid" className="grid gap-x-4 gap-y-3 md:grid-cols-4">
                   {resolutionCapability.visible && <div className="min-w-0 space-y-1.5">
                     <span className="flex h-5 items-center gap-1 text-xs font-medium text-muted-foreground"><ScanLine data-testid="video-resolution-icon" className="size-3" />{t('video.resolution')}</span>
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -841,14 +995,63 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
                       {protocolProfile.parameters.duration.mode === 'range' && <Input className="h-7 w-28 shrink-0 rounded-md px-2 text-xs" inputMode="numeric" value={customSeconds} placeholder={durationPlaceholder} onChange={event => { setCustomSeconds(event.target.value); const value = Number(event.target.value); if (isValidVideoDuration(value)) { setSeconds(value); setDurationMode('custom'); } }} />}
                     </div>
                   </div>
+                  <div className="min-w-0 space-y-1.5">
+                    <span className="flex h-5 items-center gap-1 text-xs font-medium text-muted-foreground"><Copy className="size-3" />{t('video.quantity')}</span>
+                    <Popover open={parallelPopoverOpen} onOpenChange={setParallelPopoverOpen}>
+                      <PopoverTrigger className={cn(parameterButton, 'inline-flex min-w-16 items-center justify-between gap-2', parallelCount > 1 && 'border-primary bg-primary/10 text-primary')} aria-label={t('video.quantity')}>
+                        <span className="font-medium">x{parallelCount}</span>
+                        <ChevronDown className={cn('size-3 transition-transform', parallelPopoverOpen && 'rotate-180')} />
+                      </PopoverTrigger>
+                      <PopoverContent className="w-56 p-2" align="start">
+                        <div className="grid grid-cols-5 gap-1">
+                          {PARALLEL_COUNT_OPTIONS.map(count => (
+                            <button
+                              type="button"
+                              key={count}
+                              onClick={() => handleParallelCountChange(count)}
+                              className={cn('flex h-8 items-center justify-center rounded-md border border-transparent text-sm hover:bg-muted', parallelCount === count && 'border-primary bg-primary/10 font-medium text-primary')}
+                            >
+                              {count}
+                            </button>
+                          ))}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  </div>
                   {sizeCapability.visible && <div className="min-w-0 space-y-1.5">
                     <span className="flex h-5 items-center gap-1 text-xs font-medium text-muted-foreground"><Maximize className="size-3" />{t('video.size')}</span>
                     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                       <Popover>
-                        <PopoverTrigger className={cn(parameterButton, sizeMode === 'preset' && 'border-primary bg-primary/10 text-primary')}>
-                          {activeVideoSize || videoSize}
+                        <PopoverTrigger aria-label={activeVideoSize || videoSize} className={cn(parameterButton, 'inline-flex items-center gap-1.5', sizeMode === 'preset' && 'border-primary bg-primary/10 text-primary')}>
+                          <span>{activeVideoSize || videoSize}</span>
+                          {activeSizeAspectRatio && <span className="text-[10px] text-muted-foreground">{activeSizeAspectRatio}</span>}
+                          <ChevronDown className="size-3" />
                         </PopoverTrigger>
                         <PopoverContent className="w-[min(28rem,calc(100vw-2rem))] p-2" align="start">
+                          {sizeAspectRatioOptions.length > 0 && (
+                            <div className="mb-2 border-b border-border pb-2">
+                              <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('video.aspectRatio')}</p>
+                              <div className="flex flex-wrap gap-1.5">
+                                {sizeAspectRatioOptions.map(value => (
+                                  <button
+                                    type="button"
+                                    key={value}
+                                    onClick={() => {
+                                      const matchedSize = sizeCapability.values.find(size => getVideoSizeAspectRatio(size) === value);
+                                      if (matchedSize) {
+                                        setVideoSize(matchedSize);
+                                        setSizeMode('preset');
+                                      }
+                                    }}
+                                    className={cn(parameterButton, activeSizeAspectRatio === value && sizeMode === 'preset' && 'border-primary bg-primary/10 font-medium text-primary')}
+                                  >
+                                    {value}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                          <p className="mb-1.5 text-xs font-medium text-muted-foreground">{t('video.dimensions')}</p>
                           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
                             {sizeCapability.values.map(value => {
                               const selected = sizeMode === 'preset' && videoSize === value;
@@ -900,6 +1103,35 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
                   </div>}
                 </div>
               </div>
+              {parallelCount > 1 && (
+                <div className="px-3 pb-2 sm:px-4">
+                  <button
+                    type="button"
+                    onClick={() => setPromptVariantsOpen(open => !open)}
+                    className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <span className="font-medium">
+                      {t('video.perVideoInstructions')}
+                      {submitPromptVariants && <span className="ml-1 font-normal text-primary">{submitPromptVariants.filter(Boolean).length}/{parallelCount}</span>}
+                    </span>
+                    <ChevronDown className={cn('size-3.5 transition-transform', promptVariantsOpen && 'rotate-180')} />
+                  </button>
+                  {promptVariantsOpen && (
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {activePromptVariants.map((value, index) => (
+                        <Textarea
+                          key={index}
+                          value={value}
+                          onChange={event => handlePromptVariantChange(index, event.target.value)}
+                          placeholder={t('video.additionalInstructionPlaceholder', { index: index + 1 })}
+                          rows={2}
+                          className="min-h-14 resize-none text-xs placeholder:text-placeholder"
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {models.length === 0 && (
                 <div className="mx-3 mb-2 flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/5 px-3 py-2.5 sm:mx-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex min-w-0 items-start gap-2.5">
@@ -935,7 +1167,8 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
           <article key={job.id} className="overflow-hidden rounded-lg border bg-card">
             {job.status === 'completed' && job.videoUrl ? <video className="aspect-video w-full bg-black object-contain" src={job.videoUrl} controls preload="metadata" /> : <div className="flex aspect-video items-center justify-center bg-muted"><div className="flex items-center gap-2 text-sm text-muted-foreground">{job.status === 'failed' || job.status === 'cancelled' ? <X className="size-5 text-destructive" /> : <Loader2 className="size-5 animate-spin" />}{job.status === 'cancelled' ? t('video.cancelled') : job.status === 'failed' ? t('video.failed') : job.status === '排队中' ? t('video.queued') : t('video.processing')}</div></div>}
             <div className="space-y-3 p-3">
-              <p className="line-clamp-3 text-sm">{job.prompt}</p>
+              {job.batchId && typeof job.batchIndex === 'number' && <p className="text-xs font-medium text-primary">{t('video.batchVideo', { index: job.batchIndex + 1 })}</p>}
+              <p className="line-clamp-3 whitespace-pre-line text-sm">{job.effectivePrompt || job.prompt}</p>
               <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-y py-2 text-xs sm:grid-cols-4">
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.modelName')}</dt><dd className="truncate font-medium text-foreground" title={job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}>{job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.resolution')}</dt><dd className="font-medium text-foreground">{getVideoResolutionLabel(job.resolution)}</dd></div>
