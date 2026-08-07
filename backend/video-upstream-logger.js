@@ -6,7 +6,10 @@ const DEFAULT_LOG_DIR = path.join(__dirname, 'logs', 'video-upstream');
 const MIN_MAX_CHARS = 1024;
 const MAX_MAX_CHARS = 1024 * 1024;
 const SENSITIVE_KEY_PATTERN = /^(authorization|proxyauthorization|apikey|xapikey|token|xtoken|accesstoken|refreshtoken|secret|clientsecret|signature|sig|password|cookie|setcookie)$/;
-const SENSITIVE_QUERY_KEY_PATTERN = /^(key|apikey|token|accesstoken|refreshtoken|secret|signature|sig)$/;
+const SENSITIVE_QUERY_KEY_PATTERN = /^(key|apikey|token|accesstoken|refreshtoken|secret|signature|sig|xkey|xapikey|xtoken|xaccesstoken|xrefreshtoken|xsecret|xsignature|xsig)$/;
+const COOKIE_HEADER_PATTERN = /((?:^|[\s,{])["']?(?:set[-_.]?cookie|cookie)["']?\s*[:=]\s*["']?)([^"'\r\n{}]*?)(?=\s+(?:set[-_.]?cookie|cookie)\s*[:=]|["']|$)/gi;
+const QUOTED_COOKIE_HEADER_PATTERN = /((?:^|[\s,{])["']?(?:set[-_.]?cookie|cookie)["']?\s*[:=]\s*)(["'])([^\r\n]*?)\2/gi;
+const COOKIE_ATTRIBUTE_NAMES = new Set(['domain', 'expires', 'maxage', 'path', 'samesite', 'secure', 'httponly', 'priority', 'partitioned']);
 const initializedLogDirectories = new Map();
 const warnedLogErrors = new Set();
 
@@ -160,6 +163,33 @@ function decodeVideoLogQueryValue(value) {
 }
 
 /**
+ * 脱敏 Cookie 或 Set-Cookie 头中的每个 Cookie 值，同时保留可排查的字段名和属性。
+ * @param {string} value Cookie 头的原始文本，不包含头名称前缀。
+ * @param {boolean} [isSetCookie=false] 是否为 Set-Cookie 响应头；为 true 时保留标准属性值。
+ * @returns {string} 所有 Cookie 值已脱敏的头文本。
+ */
+function sanitizeVideoCookieHeaderValue(value, isSetCookie = false) {
+  const sanitized = String(value ?? '').split(';').map((segment, index) => {
+    const separatorIndex = segment.indexOf('=');
+    // 首段没有名称和值分隔符时，按完整 Cookie 值处理，避免裸令牌原样写入日志；后续无等号段通常是 Set-Cookie 属性标记。
+    if (separatorIndex <= 0) return index === 0 && segment.trim() ? maskVideoApiKey(segment.trim()) : segment;
+    const name = segment.slice(0, separatorIndex).trim();
+    const normalizedName = name.toLowerCase().replace(/[-_.\s]/g, '');
+    if (isSetCookie && index > 0 && COOKIE_ATTRIBUTE_NAMES.has(normalizedName)) return segment;
+    const rawSecret = segment.slice(separatorIndex + 1);
+    const leadingWhitespace = rawSecret.match(/^\s*/)?.[0] || '';
+    const trailingWhitespace = rawSecret.match(/\s*$/)?.[0] || '';
+    const secret = rawSecret.slice(leadingWhitespace.length, rawSecret.length - trailingWhitespace.length || undefined);
+    return `${segment.slice(0, separatorIndex + 1)}${leadingWhitespace}${maskVideoApiKey(secret)}${trailingWhitespace}`;
+  }).join(';');
+  if (!isSetCookie) return sanitized;
+  // 同一 Set-Cookie 头可能用逗号承载多个 Cookie；只匹配逗号后的 name=value，避免把 Expires 日期中的逗号误当成 Cookie。
+  return sanitized.replace(/(,\s*)([^=;,\s]+)=(.*?)(?=;|$)/g, (_match, prefix, name, secret) => (
+    `${prefix}${name}=${maskVideoApiKey(secret)}`
+  ));
+}
+
+/**
  * 对无法解析为 JSON 的响应文本执行保守脱敏。
  * @param {string} value 上游返回的原始文本。
  * @returns {string} Bearer 令牌、敏感键值、认证查询参数和 data URL 已脱敏的文本。
@@ -168,8 +198,15 @@ function sanitizeVideoLogText(value) {
   let sanitized = summarizeDataUrls(value);
   // 先处理标准 Authorization 文本，再处理常见 JSON、日志键值和 URL 查询参数。
   sanitized = sanitized.replace(/Bearer\s+[^\s,;\]}"']+/gi, match => maskVideoApiKey(match));
-  sanitized = sanitized.replace(/(["']?(?:api[-_.]?key|access[-_.]?token|refresh[-_.]?token|authorization|secret|client[-_.]?secret|signature|password)["']?\s*[:=]\s*["']?)([^"'\s,;}&]+)/gi, (_match, prefix, secret) => `${prefix}${maskVideoApiKey(secret)}`);
-  sanitized = sanitized.replace(/([?&](?:key|api_key|apikey|token|access_token|refresh_token|secret|signature|sig)=)([^&#\s]+)/gi, (_match, prefix, secret) => `${prefix}${encodeURIComponent(maskVideoApiKey(decodeVideoLogQueryValue(secret)))}`);
+  // util.format 会把对象字符串化为带引号的键值，先单独处理这类 Cookie，避免引号被误判为值结束。
+  sanitized = sanitized.replace(QUOTED_COOKIE_HEADER_PATTERN, (_match, prefix, quote, cookieValue) => (
+    `${prefix}${quote}${sanitizeVideoCookieHeaderValue(cookieValue, /set[-_.]?cookie/i.test(prefix))}${quote}`
+  ));
+  sanitized = sanitized.replace(COOKIE_HEADER_PATTERN, (_match, prefix, cookieValue) => (
+    `${prefix}${sanitizeVideoCookieHeaderValue(cookieValue, /set[-_.]?cookie/i.test(prefix))}`
+  ));
+  sanitized = sanitized.replace(/(["']?(?:(?:x|proxy|set)[-_.])?(?:api[-_.]?key|access[-_.]?token|refresh[-_.]?token|authorization|secret|client[-_.]?secret|signature|password)["']?\s*[:=]\s*["']?)([^"'\s,;}&]+)/gi, (_match, prefix, secret) => `${prefix}${maskVideoApiKey(secret)}`);
+  sanitized = sanitized.replace(/([?&](?:(?:x[-_.])?key|(?:x[-_.])?api[-_.]?key|(?:x[-_.])?token|(?:x[-_.])?access[-_.]?token|(?:x[-_.])?refresh[-_.]?token|(?:x[-_.])?secret|(?:x[-_.])?signature|(?:x[-_.])?sig)=)([^&#\s]+)/gi, (_match, prefix, secret) => `${prefix}${encodeURIComponent(maskVideoApiKey(decodeVideoLogQueryValue(secret)))}`);
   return sanitized;
 }
 
@@ -393,6 +430,7 @@ module.exports = {
   logVideoTaskSummary,
   maskVideoApiKey,
   sanitizeVideoLogText,
+  sanitizeVideoCookieHeaderValue,
   sanitizeVideoLogUrl,
   sanitizeVideoLogValue,
   summarizeVideoRequestBody,

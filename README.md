@@ -243,7 +243,9 @@ https://image.flyreq.com/zh/?provider={"type":"video","protocol":"openai","model
 
 配置完整时，视频模型会成为视频生成默认模型。视频外链接受 `new-api`、`openai` 与 `xai` 三种协议。新链接必须使用显式 `protocol` 字段；历史 `provider=openai` 格式继续映射到旧版视频端点。
 
-视频上游每次创建、轮询和结果下载的请求与响应都会输出 `[video-upstream]` 结构化日志，并按本地日期写入 `backend/logs/video-upstream/video-upstream-YYYY-MM-DD.log` JSONL 文件。每条阶段日志都包含本地 `taskId`、模型显示名称、上游模型 ID、清晰度和当前耗时；任务完成、失败或取消时还会写入 `task-summary` 终态记录及精确的 `totalDurationMs` 总耗时。日志同时包含请求阶段、方法、URL、HTTP 状态、请求头、请求参数、响应头、响应正文和任务上下文。API Key、认证头、Cookie、签名查询参数会自动脱敏；data URL 与 multipart 媒体只记录类型、名称和字节数；`Content-Type` 为 `video/*` 的响应只记录媒体类型和字节数占位符，不会写入视频正文。日志默认开启，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED=false` 关闭；单条普通响应正文默认最多记录 65536 字符，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` 调整，落盘目录可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` 修改。Docker Compose 默认将宿主机 `./logs` 挂载到 `/app/backend/logs`，并使用 `Asia/Shanghai` 时区分割日期。
+后端全部标准日志会在保留控制台输出的同时，按本地日期写入 `backend/logs/application/application-YYYY-MM-DD.log` JSONL 文件，覆盖服务启动、任务队列、图片与视频处理、清理任务和 WebSocket 等运行事件。应用日志默认开启，可通过 `FLYREQ_FILE_LOG_ENABLED=false` 关闭，或通过 `FLYREQ_LOG_DIR` 修改目录。
+
+视频上游每次创建、轮询和结果下载的请求与响应还会输出 `[video-upstream]` 结构化日志，并按本地日期写入 `backend/logs/video-upstream/video-upstream-YYYY-MM-DD.log` JSONL 文件。每条阶段日志都包含本地 `taskId`、模型显示名称、上游模型 ID、清晰度和当前耗时；任务完成、失败或取消时还会写入 `task-summary` 终态记录及精确的 `totalDurationMs` 总耗时。日志同时包含请求阶段、方法、URL、HTTP 状态、请求头、请求参数、响应头、响应正文和任务上下文。API Key、认证头、Cookie、签名查询参数会自动脱敏；data URL 与 multipart 媒体只记录类型、名称和字节数；`Content-Type` 为 `video/*` 的响应只记录媒体类型和字节数占位符，不会写入视频正文。日志默认开启，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_ENABLED=false` 关闭；单条普通响应正文默认最多记录 65536 字符，可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_MAX_CHARS` 调整，落盘目录可通过 `FLYREQ_VIDEO_UPSTREAM_LOG_DIR` 修改。Docker Compose 默认将宿主机 `./logs` 挂载到 `/app/backend/logs`，并使用 `Asia/Shanghai` 时区分割日期。
 
 #### 字段与行为
 
@@ -629,8 +631,11 @@ docker push ghcr.io/doudou770/flyreq-image-studio:latest
 | `FLYREQ_MAX_PENDING_TASKS_PER_API_KEY` | 否 | `20` | 单 API Key 最多同时拥有多少个待处理任务 |
 | `FLYREQ_RATE_LIMIT_RETRY_AFTER_SECONDS` | 否 | `30` | 队列满/限流时响应头 `Retry-After` 秒数 |
 | `FLYREQ_IMAGE_DIR` | 否 | `backend/flyreq-images/` | 任务产物落盘目录 |
+| `FLYREQ_REMOTE_IMAGE_MAX_BYTES` | 否 | `52428800` | 服务端下载远程生成图片的最大字节数，范围为 1024 至 209715200 |
 | `FLYREQ_BASE_URL_REWRITE_MAP` | 否 | 空 | Base URL 出站改写表；例如 `{"https://flyreq.com":"http://new-api:3000"}` |
 | `FLYREQ_OUTBOUND_USER_AGENT` | 否 | `FlyReq-Image-Studio/1.5.1` | 上游请求携带的稳定服务标识；请配置为部署方可追溯的产品名称，不要伪造浏览器或第三方服务身份 |
+| `FLYREQ_FILE_LOG_ENABLED` | 否 | `true` | 是否将全部后端标准日志按日期写入文件；`false`、`0`、`no`、`off` 关闭 |
+| `FLYREQ_LOG_DIR` | 否 | `backend/logs/application` | 按日期分割的后端应用 JSONL 日志目录；Docker Compose 使用 `/app/backend/logs/application` |
 | `FLYREQ_PLATFORM_NAME` | 否 | `FlyReq Image` | 平台名称；用于页面标题、Header、设置页和 PWA 名称 |
 | `FLYREQ_PLATFORM_LOGO_URL` | 否 | `/favicon.png` | Header Logo；建议正方形且至少 `128x128`，支持 PNG/WebP/SVG |
 | `FLYREQ_PLATFORM_ICON_URL` | 否 | `/favicon.png` | 浏览器 favicon；建议使用 `48x48` PNG 或 ICO，不作为 PWA 安装图标 |

@@ -73,8 +73,8 @@ describe('视频工作台备份', () => {
   });
 
   it('视频缓存事务失败时仍关闭 IndexedDB 连接', () => {
-    expect(videoJobStoreSource.match(/finally \{/g)).toHaveLength(3);
-    expect(videoJobStoreSource.match(/db\.close\(\);/g)).toHaveLength(3);
+    expect(videoJobStoreSource.match(/finally \{/g)).toHaveLength(6);
+    expect(videoJobStoreSource.match(/db\.close\(\);/g)).toHaveLength(6);
   });
 
   it('在清空现有数据前拒绝未来版本的存储契约', async () => {

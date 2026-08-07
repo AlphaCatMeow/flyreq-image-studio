@@ -18,11 +18,15 @@ import { getCompleteVideoModels, getDefaultVideoModel, getResolvedVideoModelId, 
 import { acknowledgeVideoTask, cancelVideoTask, createVideoTask, createVideoTasks, getVideoTask } from '@/lib/video-task-client';
 import {
   cacheVideoBlob,
+  cacheVideoReferenceFiles,
   deleteVideoBlob,
+  deleteVideoReferenceFiles,
   loadVideoJobs,
   restoreVideoBlobUrl,
+  restoreVideoReferenceFiles,
   saveVideoJobs,
   type StoredVideoJob,
+  type VideoReferenceFiles,
 } from '@/lib/video-job-store';
 import { getVideoProtocolDurations, getVideoResolutionLabel, getVideoWorkspaceConfig, isAllowedVideoReferenceMimeType, isValidVideoDuration, isValidVideoProtocolDuration, isValidVideoResolution, isValidVideoSize, resolveVideoProtocolProfile } from '@/lib/video-config';
 import { generateModelId } from '@/lib/flyreq-models';
@@ -340,6 +344,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const [copiedPromptJobId, setCopiedPromptJobId] = useState<string | null>(null);
   const [durationNowMs, setDurationNowMs] = useState(() => Date.now());
   const [submitting, setSubmitting] = useState(false);
+  const [restoringJobId, setRestoringJobId] = useState<string | null>(null);
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(new Set());
   const [dragging, setDragging] = useState(false);
   const [optimizeOpen, setOptimizeOpen] = useState(false);
@@ -349,6 +354,8 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const workspaceRef = useRef<HTMLDivElement | null>(null);
   const optimizeHandleRef = useRef<StreamPromptOptimizeHandle | null>(null);
   const jobsRef = useRef(jobs);
+  const referenceFilesRef = useRef<Map<string, VideoReferenceFiles>>(new Map());
+  const referenceCachePromisesRef = useRef<Map<string, Promise<void>>>(new Map());
   const { enabled: promptOptimizeEnabled, available: promptOptimizeAvailable } = usePromptOptimizeSetting();
   const promptOptimizeUsable = promptOptimizeEnabled && promptOptimizeAvailable;
   const { submissionShortcut, isSmallViewport, updateSubmissionShortcut } = usePromptSubmissionShortcut();
@@ -732,6 +739,13 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     if (!activeReferenceVideosValid) { showToast(t('video.unsupportedReferenceVideo'), 'error'); return; }
     if (!activeReferenceAudiosValid) { showToast(t('video.unsupportedReferenceAudio'), 'error'); return; }
     const batchId = parallelCount > 1 ? generateModelId('video_batch') : undefined;
+    const hasReferenceFiles = referenceImages.length + referenceVideos.length + referenceAudios.length > 0;
+    const referenceStorageId = hasReferenceFiles ? generateModelId('video_refs') : undefined;
+    const referenceFileSnapshot: VideoReferenceFiles = {
+      images: [...referenceImages],
+      videos: [...referenceVideos],
+      audios: [...referenceAudios],
+    };
     const batchCreatedAt = new Date().toISOString();
     const batchJobs: StoredVideoJob[] = Array.from({ length: parallelCount }, (_, batchIndex) => ({
       id: generateModelId('video_job'),
@@ -749,11 +763,32 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
       videoSize: activeVideoSize,
       aspectRatio: activeAspectRatio,
       seconds: activeSeconds,
-      referenceVideos: referenceVideos.map(file => ({ name: file.name, type: file.type, size: file.size })),
-      referenceAudios: referenceAudios.map(file => ({ name: file.name, type: file.type, size: file.size })),
-      referenceImages: referenceImages.map(file => ({ name: file.name, type: file.type, size: file.size })),
+      referenceVideos: referenceVideos.map(file => ({ name: file.name, type: file.type, size: file.size, lastModified: file.lastModified })),
+      referenceAudios: referenceAudios.map(file => ({ name: file.name, type: file.type, size: file.size, lastModified: file.lastModified })),
+      referenceImages: referenceImages.map(file => ({ name: file.name, type: file.type, size: file.size, lastModified: file.lastModified })),
+      referenceStorageId,
       createdAt: batchCreatedAt,
     }));
+    if (referenceStorageId) {
+      // 内存快照保证当前页面可立即重试；IndexedDB 快照负责刷新页面后的长期恢复。
+      referenceFilesRef.current.set(referenceStorageId, referenceFileSnapshot);
+      const cachePromise = cacheVideoReferenceFiles(referenceStorageId, referenceFileSnapshot);
+      referenceCachePromisesRef.current.set(referenceStorageId, cachePromise);
+      void cachePromise.then(
+        () => {
+          // 持久化成功后释放大文件引用，避免任务历史增长导致页面内存持续上升。
+          referenceFilesRef.current.delete(referenceStorageId);
+          if (referenceCachePromisesRef.current.get(referenceStorageId) === cachePromise) {
+            referenceCachePromisesRef.current.delete(referenceStorageId);
+          }
+        },
+        error => {
+          // IndexedDB 配额或权限失败时保留当前页兜底文件，刷新页面后仍按旧记录兼容为空。
+          console.error('保存视频参考素材失败', error);
+          referenceCachePromisesRef.current.delete(referenceStorageId);
+        },
+      );
+    }
     setJobs(current => [...batchJobs].reverse().concat(current));
     setSubmitting(true);
     try {
@@ -842,10 +877,10 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     const shouldSubmit = submissionShortcut === 'enter' ? !event.shiftKey : event.shiftKey;
     if (event.key === 'Enter' && shouldSubmit && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
-      if (!prompt.trim() || !modelId || submitting) return;
+      if (!prompt.trim() || !modelId || submitting || restoringJobId) return;
       void handleSubmit();
     }
-  }, [handleSubmit, isSmallViewport, modelId, prompt, submissionShortcut, submitting]);
+  }, [handleSubmit, isSmallViewport, modelId, prompt, restoringJobId, submissionShortcut, submitting]);
 
   /**
    * 删除任务记录和对应浏览器视频缓存。
@@ -855,6 +890,24 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const removeJob = useCallback((job: StoredVideoJob) => {
     if (job.videoUrl?.startsWith('blob:')) URL.revokeObjectURL(job.videoUrl);
     void deleteVideoBlob(job.id).catch(() => undefined);
+    // 先同步更新引用，保证连续删除操作始终基于最新任务列表。
+    const remainingJobs = jobsRef.current.filter(item => item.id !== job.id);
+    jobsRef.current = remainingJobs;
+    if (job.referenceStorageId) {
+      const storageId = job.referenceStorageId;
+      const hasSharedJob = remainingJobs.some(item => item.referenceStorageId === storageId);
+      if (!hasSharedJob) {
+        const pendingCache = referenceCachePromisesRef.current.get(storageId);
+        void (pendingCache || Promise.resolve()).catch(() => undefined).then(() => {
+          referenceFilesRef.current.delete(storageId);
+          return deleteVideoReferenceFiles(storageId, {
+            images: job.referenceImages,
+            videos: job.referenceVideos,
+            audios: job.referenceAudios,
+          });
+        }).catch(() => undefined);
+      }
+    }
     setJobs(current => current.filter(item => item.id !== job.id));
   }, []);
 
@@ -912,34 +965,65 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   }, [cancellingTaskIds, showToast, t]);
 
   /**
-   * 将历史任务参数恢复到表单，参考附件需要用户重新选择。
+   * 将历史任务参数和已缓存的参考素材完整恢复到表单。
    * @param job 待重试的视频任务。
-   * @returns 无返回值。
+   * @returns 素材读取和表单恢复完成后兑现的 Promise。
    */
-  const restoreJob = useCallback((job: StoredVideoJob) => {
+  const restoreJob = useCallback(async (job: StoredVideoJob): Promise<void> => {
+    if (restoringJobId) return;
+    setRestoringJobId(job.id);
     const restoredModel = models.find(model => model.id === job.modelId);
-    const restoredProfile = resolveVideoProtocolProfile(restoredModel?.protocol || 'new-api', restoredModel ? getResolvedVideoModelId(restoredModel) : '', false);
-    setPrompt(job.effectivePrompt || job.prompt);
-    setModelId(job.modelId);
-    setResolution(job.resolution);
-    setVideoSize(job.videoSize);
-    setAspectRatio(job.aspectRatio || '16:9');
-    setSeconds(job.seconds);
-    setParallelCount(1);
-    setPromptVariants([]);
-    setPromptVariantsOpen(false);
-    const resolutionIsPreset = restoredProfile.parameters.resolution.values.includes(job.resolution);
-    setResolutionMode(resolutionIsPreset ? 'preset' : 'custom');
-    if (!resolutionIsPreset) setCustomResolution(String(job.resolution));
-    setSizeMode(config.sizes.includes(job.videoSize) ? 'preset' : 'custom');
-    if (!config.sizes.includes(job.videoSize) && job.videoSize !== 'auto') {
-      const [width, height] = job.videoSize.split('x');
-      setCustomWidth(width); setCustomHeight(height);
+    const emptyReferences: VideoReferenceFiles = { images: [], videos: [], audios: [] };
+    let restoredReferences = emptyReferences;
+    try {
+      if (job.referenceStorageId) {
+        try {
+          await referenceCachePromisesRef.current.get(job.referenceStorageId)?.catch(() => undefined);
+          const memoryReferences = referenceFilesRef.current.get(job.referenceStorageId);
+          restoredReferences = memoryReferences || await restoreVideoReferenceFiles(job.referenceStorageId, {
+            images: job.referenceImages,
+            videos: job.referenceVideos,
+            audios: job.referenceAudios,
+          });
+        } catch (error) {
+          console.error('恢复视频参考素材失败', error);
+          showToast(t('video.referenceRestoreFailed'), 'error');
+          return;
+        }
+      }
+      // 参考图可能改变模型的协议能力，必须用恢复后的素材状态计算参数模式。
+      const restoredProfile = resolveVideoProtocolProfile(
+        restoredModel?.protocol || 'new-api',
+        restoredModel ? getResolvedVideoModelId(restoredModel) : '',
+        restoredReferences.images.length > 0,
+      );
+      setPrompt(job.effectivePrompt || job.prompt);
+      setModelId(job.modelId);
+      setResolution(job.resolution);
+      setVideoSize(job.videoSize);
+      setAspectRatio(job.aspectRatio || '16:9');
+      setSeconds(job.seconds);
+      setParallelCount(1);
+      setPromptVariants([]);
+      setPromptVariantsOpen(false);
+      setReferenceImages(restoredReferences.images);
+      setReferenceVideos(restoredReferences.videos);
+      setReferenceAudios(restoredReferences.audios);
+      const resolutionIsPreset = restoredProfile.parameters.resolution.values.includes(job.resolution);
+      setResolutionMode(resolutionIsPreset ? 'preset' : 'custom');
+      if (!resolutionIsPreset) setCustomResolution(String(job.resolution));
+      setSizeMode(config.sizes.includes(job.videoSize) ? 'preset' : 'custom');
+      if (!config.sizes.includes(job.videoSize) && job.videoSize !== 'auto') {
+        const [width, height] = job.videoSize.split('x');
+        setCustomWidth(width); setCustomHeight(height);
+      }
+      const restoredDurations = getVideoProtocolDurations(restoredProfile);
+      setDurationMode(restoredDurations.includes(job.seconds) ? 'preset' : 'custom');
+      if (!restoredDurations.includes(job.seconds)) setCustomSeconds(String(job.seconds));
+    } finally {
+      setRestoringJobId(current => current === job.id ? null : current);
     }
-    const restoredDurations = getVideoProtocolDurations(restoredProfile);
-    setDurationMode(restoredDurations.includes(job.seconds) ? 'preset' : 'custom');
-    if (!restoredDurations.includes(job.seconds)) setCustomSeconds(String(job.seconds));
-  }, [config, models]);
+  }, [config, models, restoringJobId, showToast, t]);
 
   /**
    * 清空当前提示词和全部参考附件，保留用户选择的视频参数。
@@ -960,6 +1044,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     prompt.trim()
     && modelId
     && !submitting
+    && !restoringJobId
     && activeResolutionValid
     && activeVideoSizeValid
     && activeAspectRatioValid
@@ -1243,7 +1328,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
                 {job.status === 'completed' && job.videoUrl && <a className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'gap-2')} href={job.videoUrl} download={`video-${job.id}.mp4`}><Download className="size-4" />{t('video.download')}</a>}
                 {(job.status === '排队中' || job.status === 'processing') && <Button variant="outline" size="sm" className="gap-2" onClick={() => void refreshPendingJobs()}><RefreshCw className="size-4" />{t('video.checkStatus')}</Button>}
                 {(job.status === '排队中' || job.status === 'processing') && job.serverTaskId && <Button variant="outline" size="sm" className="gap-2 text-destructive hover:text-destructive" disabled={cancellingTaskIds.has(job.id)} onClick={() => void handleCancelJob(job)}>{cancellingTaskIds.has(job.id) ? <Loader2 className="size-4 animate-spin" /> : <CircleStop className="size-4" />}{t('video.cancel')}</Button>}
-                <Button variant="outline" size="sm" className="gap-2" onClick={() => restoreJob(job)}><RefreshCw className="size-4" />{t('video.retry')}</Button>
+                <Button variant="outline" size="sm" className="gap-2" disabled={Boolean(restoringJobId)} onClick={() => void restoreJob(job)}>{restoringJobId === job.id ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}{t('video.retry')}</Button>
                 {job.status !== '排队中' && job.status !== 'processing' && <Button variant="ghost" size="sm" className="ml-auto gap-2 text-destructive" onClick={() => removeJob(job)}><Trash2 className="size-4" />{t('video.remove')}</Button>}
               </div>
             </div>

@@ -5,6 +5,19 @@ export interface VideoReferenceMetadata {
   name: string;
   type: string;
   size: number;
+  lastModified?: number;
+}
+
+export interface VideoReferenceFiles {
+  images: File[];
+  videos: File[];
+  audios: File[];
+}
+
+export interface VideoReferenceMetadataGroup {
+  images: VideoReferenceMetadata[];
+  videos: VideoReferenceMetadata[];
+  audios: VideoReferenceMetadata[];
 }
 
 export interface StoredVideoJob {
@@ -31,6 +44,8 @@ export interface StoredVideoJob {
   referenceVideos: VideoReferenceMetadata[];
   referenceAudios: VideoReferenceMetadata[];
   referenceImages: VideoReferenceMetadata[];
+  /** 当前任务关联的参考素材二进制存储标识；同一批量任务共享一份素材。 */
+  referenceStorageId?: string;
   createdAt: string;
   completedAt?: string;
   durationMs?: number;
@@ -90,6 +105,130 @@ function openVideoDb(): Promise<IDBDatabase> {
     };
     request.onerror = () => reject(request.error);
   });
+}
+
+/**
+ * 构造视频参考素材在 IndexedDB 中的稳定键。
+ * @param storageId 一次提交共享的素材存储标识。
+ * @param kind 素材类型。
+ * @param index 素材在同类型列表中的从零开始序号。
+ * @returns 不会与视频结果任务键冲突的 IndexedDB 键。
+ */
+function getVideoReferenceKey(storageId: string, kind: keyof VideoReferenceFiles, index: number): string {
+  return `reference:${storageId}:${kind}:${index}`;
+}
+
+/**
+ * 将一次视频提交使用的全部参考素材持久化到 IndexedDB。
+ * @param storageId 一次提交共享的素材存储标识。
+ * @param files 按图片、视频和音频分类的原始文件。
+ * @returns 全部素材写入完成后兑现的 Promise。
+ */
+export async function cacheVideoReferenceFiles(storageId: string, files: VideoReferenceFiles): Promise<void> {
+  const db = await openVideoDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(VIDEO_STORE_NAME);
+      (Object.keys(files) as Array<keyof VideoReferenceFiles>).forEach(kind => {
+        files[kind].forEach((file, index) => {
+          store.put(file, getVideoReferenceKey(storageId, kind, index));
+        });
+      });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    // 大文件写入完成后立即关闭连接，避免阻塞完整备份和数据库恢复。
+    db.close();
+  }
+}
+
+/**
+ * 从当前事务中读取一类参考素材并重建为可上传的 File。
+ * @param store 视频缓存 object store。
+ * @param storageId 一次提交共享的素材存储标识。
+ * @param kind 素材类型。
+ * @param metadata 用于恢复文件名、MIME 类型和顺序的任务元数据。
+ * @returns 完整的参考素材文件；任一记录缺失时拒绝恢复。
+ */
+function restoreVideoReferenceKind(
+  store: IDBObjectStore,
+  storageId: string,
+  kind: keyof VideoReferenceFiles,
+  metadata: VideoReferenceMetadata[],
+): Promise<File[]> {
+  return Promise.all(metadata.map((item, index) => new Promise<File>((resolve, reject) => {
+    const request = store.get(getVideoReferenceKey(storageId, kind, index));
+    request.onsuccess = () => {
+      const blob = request.result as Blob | undefined;
+      if (!blob) {
+        reject(new Error(`视频参考素材缓存缺失: ${kind}[${index}]`));
+        return;
+      }
+      resolve(new File([blob], item.name, {
+        type: item.type || blob.type,
+        lastModified: item.lastModified ?? Date.now() + index,
+      }));
+    };
+    request.onerror = () => reject(request.error);
+  })));
+}
+
+/**
+ * 从 IndexedDB 恢复一次视频提交使用的全部参考素材。
+ * @param storageId 一次提交共享的素材存储标识。
+ * @param metadata 按图片、视频和音频分类的文件元数据。
+ * @returns 可直接重新提交的三类 File 数组。
+ */
+export async function restoreVideoReferenceFiles(
+  storageId: string,
+  metadata: VideoReferenceMetadataGroup,
+): Promise<VideoReferenceFiles> {
+  const db = await openVideoDb();
+  try {
+    const store = db.transaction(VIDEO_STORE_NAME, 'readonly').objectStore(VIDEO_STORE_NAME);
+    const [images, videos, audios] = await Promise.all([
+      restoreVideoReferenceKind(store, storageId, 'images', metadata.images),
+      restoreVideoReferenceKind(store, storageId, 'videos', metadata.videos),
+      restoreVideoReferenceKind(store, storageId, 'audios', metadata.audios),
+    ]);
+    return { images, videos, audios };
+  } finally {
+    // 恢复结束后释放数据库连接，避免长期占用大文件缓存数据库。
+    db.close();
+  }
+}
+
+/**
+ * 删除一次视频提交缓存的全部参考素材。
+ * @param storageId 一次提交共享的素材存储标识。
+ * @param metadata 按类型记录的素材元数据，用于确定需要删除的键。
+ * @returns 全部对应记录删除完成后兑现的 Promise。
+ */
+export async function deleteVideoReferenceFiles(
+  storageId: string,
+  metadata: VideoReferenceMetadataGroup,
+): Promise<void> {
+  const db = await openVideoDb();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(VIDEO_STORE_NAME);
+      (Object.keys(metadata) as Array<keyof VideoReferenceMetadataGroup>).forEach(kind => {
+        metadata[kind].forEach((_, index) => {
+          store.delete(getVideoReferenceKey(storageId, kind, index));
+        });
+      });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  } finally {
+    // 删除结束后关闭连接，确保后续备份恢复可以独占升级数据库。
+    db.close();
+  }
 }
 
 /**

@@ -43,7 +43,9 @@ describe('视频协议能力配置', () => {
   });
 
   it('拒绝模型规则合并后删除必填能力字段', () => {
-    expect(() => resolveVideoProtocolConfig({
+    let thrown: unknown;
+    try {
+      resolveVideoProtocolConfig({
       FLYREQ_VIDEO_PROTOCOL_CONFIG_OVERRIDES: JSON.stringify({
         protocols: {
           xai: {
@@ -55,7 +57,13 @@ describe('视频协议能力配置', () => {
           },
         },
       }),
-    })).toThrow('视频模型能力规则合并结果无效');
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain('视频模型能力规则合并结果无效');
+    expect((thrown as Error).cause).toBeInstanceOf(Error);
   });
 
   it('拒绝与任务入口约束冲突的协议能力覆盖', () => {
