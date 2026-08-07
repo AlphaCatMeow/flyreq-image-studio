@@ -6,6 +6,7 @@ import { persist, createJSONStorage } from "zustand/middleware";
 import { getDefaultModelId } from "@/lib/gemini-config";
 import { normalizeModel } from "@/lib/model-capabilities";
 import type { CanvasGenerationConfig } from "../canvas-generation-service";
+import { LOCAL_STORAGE_KEYS } from "@/lib/storage-contract";
 
 export const defaultCanvasConfig: CanvasGenerationConfig = {
   model: getDefaultModelId(),
@@ -34,7 +35,7 @@ export const useCanvasConfigStore = create<CanvasConfigStore>()(
       setConfig: (patch) => set((state) => ({ config: { ...state.config, ...patch } })),
     }),
     {
-      name: "flyreq-image:canvas_config",
+      name: LOCAL_STORAGE_KEYS.canvasConfig,
       storage: createJSONStorage(() => (typeof window !== "undefined" ? window.localStorage : (undefined as unknown as Storage))),
       merge: (persisted, current) => {
         const persistedConfig = ((persisted as Partial<CanvasConfigStore>)?.config || {}) as Partial<CanvasGenerationConfig>;

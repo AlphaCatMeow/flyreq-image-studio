@@ -1,5 +1,7 @@
 'use client';
 
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowUp,
@@ -46,7 +48,16 @@ import {
 import { MAX_UPLOAD_SIZE_BYTES } from '@/lib/constants';
 import { loadJsonFromStorage, saveJsonToStorage } from '@/lib/settings-storage';
 
-const REVERSE_SETTINGS_KEY = 'flyreq-reverse-prompt-settings';
+const REVERSE_SETTINGS_KEY = LOCAL_STORAGE_KEYS.reversePromptSettings;
+
+/**
+ * 观察后台反推持久化任务，避免存储失败形成未处理的 Promise。
+ * @param task 待观察的异步存储任务。
+ * @returns 无返回值；失败原因会写入浏览器错误日志。
+ */
+function observeReverseStorageTask(task: Promise<unknown>): void {
+  void task.catch((error) => console.error('反推浏览器存储操作失败', error));
+}
 
 interface ReverseSettings {
   model: ReversePromptModelId;
@@ -130,7 +141,7 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
       setSettingsReady(true);
 
     // 恢复反推结果
-    void loadReverseResults().then((stored) => {
+    observeReverseStorageTask(loadReverseResults().then((stored) => {
       if (stored.current) {
         setCurrentResult({
           text: stored.current.text,
@@ -152,7 +163,7 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
       if (stored.draft?.file) {
         setPendingFile(stored.draft.file);
       }
-    });
+    }));
     });
 
     return () => {
@@ -200,7 +211,7 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
         badge: getOptimizationBadge(optimized.originalSize, optimized.processedSize, optimized.cacheHit),
       };
       setPendingFile(nextFile);
-      void saveReverseDraft(nextFile);
+      observeReverseStorageTask(saveReverseDraft(nextFile));
     } catch {
       setUploadError('文件读取失败');
     } finally {
@@ -232,7 +243,7 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
 
   const handleRemoveFile = useCallback(() => {
     setPendingFile(null);
-    void clearReverseDraft();
+    observeReverseStorageTask(clearReverseDraft());
   }, []);
 
   // 粘贴图片支持
@@ -273,14 +284,14 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
       setPreviousResult(currentResult);
       setPreviousExpanded(false);
       // 持久化上次结果
-      void saveReverseResult({
+      observeReverseStorageTask(saveReverseResult({
         slot: 'previous',
         text: currentResult.text,
         model: currentResult.model,
         mode: currentResult.mode,
         aborted: currentResult.aborted,
         timestamp: Date.now(),
-      });
+      }));
     }
     setCurrentResult({ text: '', model, mode, finished: false });
     setError(null);
@@ -311,14 +322,14 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
           streamHandleRef.current = null;
           // 持久化当前结果
           if (fullText.length > 0) {
-            void saveReverseResult({
+            observeReverseStorageTask(saveReverseResult({
               slot: 'current',
               text: fullText,
               model,
               mode,
               aborted: false,
               timestamp: Date.now(),
-            });
+            }));
           }
         },
         onError: (err) => {
@@ -326,14 +337,14 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
           setCurrentResult(prev => {
             if (prev && prev.text.length > 0) {
               // 失败时如果有内容也持久化
-              void saveReverseResult({
+              observeReverseStorageTask(saveReverseResult({
                 slot: 'current',
                 text: prev.text,
                 model,
                 mode,
                 aborted: false,
                 timestamp: Date.now(),
-              });
+              }));
             }
             return prev ? { ...prev, finished: true } : prev;
           });
@@ -353,14 +364,14 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
     setCurrentResult(prev => {
       if (prev && prev.text.length > 0) {
         // 停止时如果有内容也持久化
-        void saveReverseResult({
+        observeReverseStorageTask(saveReverseResult({
           slot: 'current',
           text: prev.text,
           model: prev.model,
           mode: prev.mode,
           aborted: true,
           timestamp: Date.now(),
-        });
+        }));
       }
       return prev ? { ...prev, finished: true, aborted: true } : prev;
     });
@@ -380,7 +391,7 @@ export function ReversePromptForm({ wideMode = false, disabled = false, onConfig
   const handleClearDraft = () => {
     setPendingFile(null);
     setUploadError(null);
-    void clearReverseDraft();
+    observeReverseStorageTask(clearReverseDraft());
   };
 
   const canSubmit = !!pendingFile && !formDisabled && !uploading && !streaming;

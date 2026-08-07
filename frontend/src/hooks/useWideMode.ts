@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
-export const WIDE_MODE_STORAGE_KEY = 'flyreq-wide-mode';
+export const WIDE_MODE_STORAGE_KEY = LOCAL_STORAGE_KEYS.wideMode;
 
 // 宽屏（侧栏）布局基于 xl 断点设计。视口窄于该宽度时，侧栏会与顶部 Header 重复、
 // 纵向 Tab 布局错位，因此宽屏必须自动关闭；重新变宽不会自动开启。

@@ -221,8 +221,12 @@ function VideoReferenceImageChips({ files, onRemove, prompt }: VideoReferenceIma
       const preview = URL.createObjectURL(file);
       return { id: `${file.name}-${file.lastModified}`, name: file.name, preview, dataUrl: preview, mimeType: file.type };
     });
-    setAttachmentFiles(nextFiles);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setAttachmentFiles(nextFiles);
+    });
     return () => {
+      cancelled = true;
       for (const file of nextFiles) URL.revokeObjectURL(file.preview);
     };
   }, [files]);
@@ -351,9 +355,12 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
 
   useEffect(() => {
     if (!jobs.some(job => job.status === '排队中' || job.status === 'processing')) return;
-    setDurationNowMs(Date.now());
+    const initialUpdate = window.setTimeout(() => setDurationNowMs(Date.now()), 0);
     const timer = window.setInterval(() => setDurationNowMs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialUpdate);
+      window.clearInterval(timer);
+    };
   }, [jobs]);
 
   /**
@@ -409,28 +416,37 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
 
   /** 当模型或协议改变附件约束时，立即移除格式不兼容或超过数量上限的参考图。 */
   useEffect(() => {
+    let cancelled = false;
     const supportedImages = referenceImages.filter(file => isAllowedVideoReferenceMimeType(file.type, protocolProfile.references.imageMimeTypes));
     const nextImages = supportedImages.slice(0, maxReferenceImages);
     const removedUnsupportedImages = supportedImages.length !== referenceImages.length;
     const removedExcessImages = supportedImages.length > maxReferenceImages;
-    if (!removedUnsupportedImages && !removedExcessImages) return;
-    setReferenceImages(nextImages);
-    if (removedUnsupportedImages) showToast(t('video.unsupportedReferenceImageFormat'), 'error');
-    if (removedExcessImages) showToast(t('video.imageLimit', { max: maxReferenceImages }), 'error');
+    if (removedUnsupportedImages || removedExcessImages) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setReferenceImages(nextImages);
+        if (removedUnsupportedImages) showToast(t('video.unsupportedReferenceImageFormat'), 'error');
+        if (removedExcessImages) showToast(t('video.imageLimit', { max: maxReferenceImages }), 'error');
+      });
+    }
+    return () => { cancelled = true; };
   }, [maxReferenceImages, protocolProfile.references.imageMimeTypes, referenceImages, showToast, t]);
 
   /** 读取首张参考图尺寸，并在参考图移除或读取失败时退出参考尺寸模式。 */
   useEffect(() => {
     const image = referenceImages[0];
-    if (!image) {
-      setReferenceImageSize('');
-      if (sizeMode === 'reference') {
-        setSizeMode('preset');
-        setVideoSize(protocolProfile.parameters.size.values[0] || '1280x720');
-      }
-      return;
-    }
     let cancelled = false;
+    if (!image) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setReferenceImageSize('');
+        if (sizeMode === 'reference') {
+          setSizeMode('preset');
+          setVideoSize(protocolProfile.parameters.size.values[0] || '1280x720');
+        }
+      });
+      return () => { cancelled = true; };
+    }
     void readReferenceImageVideoSize(image).then(size => {
       if (cancelled) return;
       setReferenceImageSize(size);
@@ -441,16 +457,23 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
 
   /** 当模型或协议改变附件约束时，立即移除格式不兼容或超过数量上限的视频和音频。 */
   useEffect(() => {
+    let cancelled = false;
     const nextVideos = referenceVideos.filter(file => isAllowedVideoReferenceMimeType(file.type, protocolProfile.references.videoMimeTypes)).slice(0, maxReferenceVideos);
     const nextAudios = referenceAudios.filter(file => isAllowedVideoReferenceMimeType(file.type, protocolProfile.references.audioMimeTypes)).slice(0, maxReferenceAudios);
-    if (nextVideos.length !== referenceVideos.length) {
-      setReferenceVideos(nextVideos);
-      showToast(t('video.unsupportedReferenceVideo'), 'error');
+    if (nextVideos.length !== referenceVideos.length || nextAudios.length !== referenceAudios.length) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        if (nextVideos.length !== referenceVideos.length) {
+          setReferenceVideos(nextVideos);
+          showToast(t('video.unsupportedReferenceVideo'), 'error');
+        }
+        if (nextAudios.length !== referenceAudios.length) {
+          setReferenceAudios(nextAudios);
+          showToast(t('video.unsupportedReferenceAudio'), 'error');
+        }
+      });
     }
-    if (nextAudios.length !== referenceAudios.length) {
-      setReferenceAudios(nextAudios);
-      showToast(t('video.unsupportedReferenceAudio'), 'error');
-    }
+    return () => { cancelled = true; };
   }, [maxReferenceAudios, maxReferenceVideos, protocolProfile.references.audioMimeTypes, protocolProfile.references.videoMimeTypes, referenceAudios, referenceVideos, showToast, t]);
 
   useEffect(() => {

@@ -1,3 +1,5 @@
+import { closeIndexedDbOnVersionChange, ensureIndexedDbSchema, INDEXED_DB } from '@/lib/storage-contract';
+
 export interface PreparedUploadImage {
     id: string;
     name: string;
@@ -23,9 +25,10 @@ interface CachedUploadImage {
     createdAt: number;
 }
 
-const DB_NAME = 'flyreq-upload-cache';
-const DB_VERSION = 1;
-const STORE_NAME = 'images';
+const UPLOAD_CACHE_DB_CONTRACT = INDEXED_DB.uploadCache;
+const DB_NAME = UPLOAD_CACHE_DB_CONTRACT.name;
+const DB_VERSION = UPLOAD_CACHE_DB_CONTRACT.version;
+const STORE_NAME = UPLOAD_CACHE_DB_CONTRACT.stores[0].name;
 
 function openDB(): Promise<IDBDatabase | null> {
     if (typeof indexedDB === 'undefined') return Promise.resolve(null);
@@ -35,12 +38,12 @@ function openDB(): Promise<IDBDatabase | null> {
 
         request.onerror = () => resolve(null);
         request.onupgradeneeded = () => {
-            const db = request.result;
-            if (!db.objectStoreNames.contains(STORE_NAME)) {
-                db.createObjectStore(STORE_NAME, { keyPath: 'key' });
-            }
+            ensureIndexedDbSchema(request.result, request.transaction, UPLOAD_CACHE_DB_CONTRACT);
         };
-        request.onsuccess = () => resolve(request.result);
+        request.onsuccess = () => {
+            closeIndexedDbOnVersionChange(request.result);
+            resolve(request.result);
+        };
     });
 }
 
@@ -51,8 +54,14 @@ async function getCachedImage(key: string): Promise<CachedUploadImage | null> {
     return new Promise((resolve) => {
         const tx = db.transaction(STORE_NAME, 'readonly');
         const req = tx.objectStore(STORE_NAME).get(key);
-        req.onsuccess = () => resolve((req.result as CachedUploadImage) || null);
-        req.onerror = () => resolve(null);
+        req.onsuccess = () => {
+            db.close();
+            resolve((req.result as CachedUploadImage) || null);
+        };
+        req.onerror = () => {
+            db.close();
+            resolve(null);
+        };
     });
 }
 
@@ -63,8 +72,14 @@ async function saveCachedImage(record: CachedUploadImage): Promise<void> {
     return new Promise((resolve) => {
         const tx = db.transaction(STORE_NAME, 'readwrite');
         tx.objectStore(STORE_NAME).put(record);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => resolve();
+        tx.oncomplete = () => {
+            db.close();
+            resolve();
+        };
+        tx.onerror = () => {
+            db.close();
+            resolve();
+        };
     });
 }
 

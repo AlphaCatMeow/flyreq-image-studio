@@ -1,5 +1,7 @@
 'use client';
 
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import {
@@ -59,7 +61,7 @@ interface AssetsWorkspaceProps {
   active?: boolean;
 }
 
-const SETTINGS_KEY = 'flyreq-assets-settings';
+const SETTINGS_KEY = LOCAL_STORAGE_KEYS.assetsSettings;
 const PAGE_SIZE = 48;
 const PROMPT_TAG = '提示词';
 const SORT_OPTIONS: Array<{ value: 'newest' | 'oldest' | 'used'; label: string }> = [

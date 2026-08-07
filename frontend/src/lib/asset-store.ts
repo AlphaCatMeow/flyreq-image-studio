@@ -1,5 +1,7 @@
 'use client';
 
+import { closeIndexedDbOnVersionChange, ensureIndexedDbSchema, INDEXED_DB } from '@/lib/storage-contract';
+
 export type AssetSourceKind =
   | 'text-to-image'
   | 'image-to-image'
@@ -86,10 +88,11 @@ export interface AddTextAssetInput {
   sourceRef?: string;
 }
 
-const DB_NAME = 'flyreq-assets-db';
-const DB_VERSION = 1;
-const ASSETS_STORE = 'assets';
-const BLOBS_STORE = 'asset-blobs';
+const ASSETS_DB_CONTRACT = INDEXED_DB.assets;
+const DB_NAME = ASSETS_DB_CONTRACT.name;
+const DB_VERSION = ASSETS_DB_CONTRACT.version;
+const ASSETS_STORE = ASSETS_DB_CONTRACT.stores[0].name;
+const BLOBS_STORE = ASSETS_DB_CONTRACT.stores[1].name;
 const THUMB_MAX_SIDE = 512;
 
 function now(): number {
@@ -217,17 +220,13 @@ function openAssetsDB(): Promise<IDBDatabase | null> {
   return new Promise(resolve => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onerror = () => resolve(null);
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      closeIndexedDbOnVersionChange(req.result);
+      resolve(req.result);
+    };
     req.onupgradeneeded = event => {
-      const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(ASSETS_STORE)) {
-        const store = db.createObjectStore(ASSETS_STORE, { keyPath: 'id' });
-        store.createIndex('hash', 'hash', { unique: false });
-        store.createIndex('createdAt', 'createdAt', { unique: false });
-      }
-      if (!db.objectStoreNames.contains(BLOBS_STORE)) {
-        db.createObjectStore(BLOBS_STORE, { keyPath: 'key' });
-      }
+      const request = event.target as IDBOpenDBRequest;
+      ensureIndexedDbSchema(request.result, request.transaction, ASSETS_DB_CONTRACT);
     };
   });
 }

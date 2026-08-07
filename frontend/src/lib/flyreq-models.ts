@@ -1,6 +1,7 @@
 'use client';
 
 import { BUILTIN_IMAGE_PRESETS } from '@/lib/builtin-image-presets';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 export { BUILTIN_IMAGE_PRESETS, applyBuiltinImagePresetModelIds } from '@/lib/builtin-image-presets';
 export type { BuiltinImagePreset, BuiltinImagePresetId, BuiltinImagePresetModelIds, ImageOutputSize, ProviderProtocol } from '@/lib/builtin-image-presets';
 import type { BuiltinImagePresetId, ImageOutputSize, ProviderProtocol } from '@/lib/builtin-image-presets';
@@ -69,7 +70,7 @@ export interface FlyreqModelRegistry {
   defaults: DefaultModels;
 }
 
-const REGISTRY_KEY = 'flyreq-model-registry';
+const REGISTRY_KEY = LOCAL_STORAGE_KEYS.modelRegistry;
 const DEFAULT_FLYREQ_IMAGE_MODEL_ID = 'flyreq-gpt-image-2';
 const DEFAULT_FLYREQ_VIDEO_MODEL_ID = 'flyreq-sora-2';
 export const DEFAULT_VIDEO_GENERATION_MODEL_ID = 'sora-2';

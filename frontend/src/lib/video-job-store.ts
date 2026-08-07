@@ -1,4 +1,5 @@
 import type { VideoProtocol } from '@/lib/flyreq-models';
+import { closeIndexedDbOnVersionChange, ensureIndexedDbSchema, INDEXED_DB, LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
 export interface VideoReferenceMetadata {
   name: string;
@@ -39,9 +40,10 @@ export interface StoredVideoJob {
   error?: string;
 }
 
-const VIDEO_JOBS_KEY = 'flyreq-video-jobs';
-const VIDEO_DB_NAME = 'flyreq-video-results';
-const VIDEO_STORE_NAME = 'videos';
+const VIDEO_DB_CONTRACT = INDEXED_DB.videoResults;
+const VIDEO_JOBS_KEY = LOCAL_STORAGE_KEYS.videoJobs;
+const VIDEO_DB_NAME = VIDEO_DB_CONTRACT.name;
+const VIDEO_STORE_NAME = VIDEO_DB_CONTRACT.stores[0].name;
 
 /**
  * 读取浏览器本地视频任务历史。
@@ -64,7 +66,12 @@ export function loadVideoJobs(): StoredVideoJob[] {
  */
 export function saveVideoJobs(jobs: StoredVideoJob[]): void {
   if (typeof window === 'undefined') return;
-  localStorage.setItem(VIDEO_JOBS_KEY, JSON.stringify(jobs.map(job => ({ ...job, videoUrl: job.cached ? undefined : job.videoUrl }))));
+  try {
+    localStorage.setItem(VIDEO_JOBS_KEY, JSON.stringify(jobs.map(job => ({ ...job, videoUrl: job.cached ? undefined : job.videoUrl }))));
+  } catch (error) {
+    // 持久化失败时保留当前内存任务，避免 React effect 中的异常导致工作台崩溃。
+    console.error('保存视频任务历史到 localStorage 失败', error);
+  }
 }
 
 /**
@@ -73,11 +80,14 @@ export function saveVideoJobs(jobs: StoredVideoJob[]): void {
  */
 function openVideoDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open(VIDEO_DB_NAME, 1);
+    const request = indexedDB.open(VIDEO_DB_NAME, VIDEO_DB_CONTRACT.version);
     request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(VIDEO_STORE_NAME)) request.result.createObjectStore(VIDEO_STORE_NAME);
+      ensureIndexedDbSchema(request.result, request.transaction, VIDEO_DB_CONTRACT);
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      closeIndexedDbOnVersionChange(request.result);
+      resolve(request.result);
+    };
     request.onerror = () => reject(request.error);
   });
 }

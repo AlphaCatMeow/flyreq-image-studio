@@ -1,5 +1,7 @@
 'use client';
 
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowUp,
@@ -79,7 +81,7 @@ import { MAX_UPLOAD_SIZE_BYTES } from '@/lib/constants';
 import { loadJsonFromStorage, saveJsonToStorage } from '@/lib/settings-storage';
 
 const MAX_AGENT_ASSET_IMPORTS = 5;
-const AGENT_PARAMS_KEY = 'flyreq-agent-params';
+const AGENT_PARAMS_KEY = LOCAL_STORAGE_KEYS.agentParams;
 
 interface AgentParamsSettings {
   model: ModelId;

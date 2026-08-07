@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useSyncExternalStore } from 'react';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
-export const PROMPT_SUBMISSION_SHORTCUT_STORAGE_KEY = 'flyreq-prompt-submission-shortcut';
+export const PROMPT_SUBMISSION_SHORTCUT_STORAGE_KEY = LOCAL_STORAGE_KEYS.promptSubmissionShortcut;
 const PROMPT_SUBMISSION_SHORTCUT_CHANGE_EVENT = 'flyreq-prompt-submission-shortcut-changed';
 const DEFAULT_PROMPT_SUBMISSION_SHORTCUT: PromptSubmissionShortcut = 'enter';
 const SMALL_VIEWPORT_MAX_WIDTH = 639;

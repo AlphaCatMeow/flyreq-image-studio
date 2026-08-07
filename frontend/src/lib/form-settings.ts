@@ -7,6 +7,7 @@
 import type { ModelId } from '@/lib/gemini-config';
 import type { OutputSize, AspectRatio } from '@/lib/job-store';
 import type { GptImageBackground, GptImageOutputFormat, GptImageQuality, GptImageStyle, ParallelCount } from '@/lib/model-capabilities';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
 export interface ImageFormSettings {
   model: ModelId;
@@ -23,9 +24,9 @@ export interface ImageFormSettings {
 }
 
 export const IMAGE_FORM_SETTINGS_STORAGE_KEYS = [
-  'flyreq-image-generation-settings',
-  'flyreq-t2i-settings',
-  'flyreq-i2i-settings',
+  LOCAL_STORAGE_KEYS.imageWorkbenchSettings,
+  LOCAL_STORAGE_KEYS.textToImageSettings,
+  LOCAL_STORAGE_KEYS.imageToImageSettings,
 ] as const;
 
 /**

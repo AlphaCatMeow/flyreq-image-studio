@@ -5,6 +5,7 @@ import { nanoid } from "nanoid";
 import { localForageStorage } from "../lib/localforage-storage";
 import type { CanvasBackgroundMode } from "../lib/canvas-theme";
 import type { CanvasConnection, CanvasNodeData, ViewportTransform } from "../types";
+import { LOCAL_FORAGE_KEYS } from "@/lib/storage-contract";
 
 export type CanvasProject = {
   id: string;
@@ -33,7 +34,7 @@ type CanvasStore = {
 };
 
 const initialViewport: ViewportTransform = { x: 0, y: 0, k: 1 };
-const CANVAS_STORE_KEY = "flyreq-image:canvas_store";
+const CANVAS_STORE_KEY = LOCAL_FORAGE_KEYS.canvasStore;
 type PersistedCanvasState = Pick<CanvasStore, "projects">;
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let queuedPersistState: PersistedCanvasState | null = null;

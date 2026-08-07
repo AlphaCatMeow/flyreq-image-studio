@@ -13,6 +13,7 @@ import { Button, buttonVariants } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/components/LanguageProvider';
 import { applyTheme, isTheme, type Theme } from '@/lib/theme';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
 const themeOptions: { value: Theme; labelKey: 'theme.light' | 'theme.dark' | 'theme.system'; icon: typeof Sun }[] = [
   { value: 'system', labelKey: 'theme.system', icon: Monitor },
@@ -33,7 +34,7 @@ export function ThemeToggle({ iconOnly = false }: { iconOnly?: boolean }) {
 
       setMounted(true);
       try {
-        const stored = localStorage.getItem('theme');
+        const stored = localStorage.getItem(LOCAL_STORAGE_KEYS.theme);
         const nextTheme = isTheme(stored) ? stored : 'system';
         setTheme(nextTheme);
         applyTheme(nextTheme);
@@ -51,7 +52,7 @@ export function ThemeToggle({ iconOnly = false }: { iconOnly?: boolean }) {
     if (!isTheme(newTheme)) return;
     setTheme(newTheme);
     try {
-      localStorage.setItem('theme', newTheme);
+      localStorage.setItem(LOCAL_STORAGE_KEYS.theme, newTheme);
     } catch {
       // Storage can be unavailable in hardened/private browser modes.
     }
