@@ -139,8 +139,13 @@ function createVideoRequest(protocol, apiKey, request, files) {
  * @returns {string} 上游任务标识；缺失时返回空字符串。
  */
 function getCreatedVideoTaskId(protocol, data) {
-  const value = protocol === 'new-api' ? data?.task_id : protocol === 'xai' ? data?.request_id : data?.id;
-  return typeof value === 'string' ? value : '';
+  const nativeField = protocol === 'new-api' ? 'task_id' : protocol === 'xai' ? 'request_id' : 'id';
+  const candidateFields = [nativeField, ...['id', 'request_id', 'task_id'].filter(field => field !== nativeField)];
+  for (const field of candidateFields) {
+    const value = data?.[field];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
 }
 
 /**
@@ -160,23 +165,21 @@ function getVideoPollPath(protocol, taskId) {
  * @param {Record<string, any>} data 上游任务响应。
  * @param {string} baseUrl 已规范化的上游基础地址。
  * @param {string} taskId 上游任务标识。
- * @returns {{ state: 'pending' | 'completed' | 'failed', remoteUrl?: string }} 统一任务状态。
+ * @returns {{ state: 'pending' | 'completed' | 'failed' | 'invalid', remoteUrl?: string }} 统一任务状态。
  */
 function normalizeVideoPollResult(protocol, data, baseUrl, taskId) {
   const status = String(data?.status || '').toLowerCase();
-  if (protocol === 'openai') {
-    if (status === 'completed') return { state: 'completed', remoteUrl: appendVideoApiPath(baseUrl, `/v1/videos/${encodeURIComponent(taskId)}/content`) };
-    if (status === 'failed' || status === 'cancelled') return { state: 'failed' };
-    return { state: 'pending' };
+  if (['failed', 'cancelled', 'expired'].includes(status)) return { state: 'failed' };
+
+  // 不论请求协议为何，优先识别第三方兼容服务常见的两种直接结果地址。
+  const remoteUrl = [data?.video?.url, data?.url].find(value => typeof value === 'string' && value.trim());
+  if (remoteUrl) return { state: 'completed', remoteUrl: remoteUrl.trim() };
+
+  // OpenAI 官方完成态不返回结果 URL，需要通过同一任务的 content 端点下载。
+  if (status === 'completed' && protocol === 'openai') {
+    return { state: 'completed', remoteUrl: appendVideoApiPath(baseUrl, `/v1/videos/${encodeURIComponent(taskId)}/content`) };
   }
-  if (protocol === 'xai') {
-    const remoteUrl = data?.video?.url;
-    if (typeof remoteUrl === 'string' && remoteUrl) return { state: 'completed', remoteUrl };
-    if (status === 'failed' || status === 'expired') return { state: 'failed' };
-    return { state: 'pending' };
-  }
-  if (status === 'completed' && typeof data?.url === 'string' && data.url) return { state: 'completed', remoteUrl: data.url };
-  if (status === 'failed') return { state: 'failed' };
+  if (status === 'completed') return { state: 'invalid' };
   return { state: 'pending' };
 }
 

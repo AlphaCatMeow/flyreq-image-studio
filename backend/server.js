@@ -2485,8 +2485,11 @@ async function createUpstreamVideo(apiKey, request, files, signal, trace) {
     ...logOptions,
     isError: !response.ok || !upstreamTaskId,
   });
-  if (!response.ok || !upstreamTaskId) {
+  if (!response.ok) {
     throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '未返回任务 ID')}`);
+  }
+  if (!upstreamTaskId) {
+    throw new Error(`上游创建响应格式不兼容（HTTP ${response.status}）：${getVideoUpstreamErrorDetail(data, responseText, '未返回可识别的任务 ID')}`);
   }
   return upstreamTaskId;
 }
@@ -2519,7 +2522,7 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal, trace)
     const result = data ? normalizeVideoPollResult(request.protocol, data, baseUrl, upstreamTaskId) : null;
     logVideoUpstreamResponse('poll', url, response, responseText, context, {
       ...logOptions,
-      isError: !response.ok || !data || result?.state === 'failed',
+      isError: !response.ok || !data || result?.state === 'failed' || result?.state === 'invalid',
     });
     if (!response.ok || !data) {
       throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '轮询响应格式无效')}`);
@@ -2527,6 +2530,9 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal, trace)
     if (result.state === 'completed') return { remoteUrl: result.remoteUrl, authenticatedOrigin: new URL(baseUrl).origin };
     if (result.state === 'failed') {
       throw new Error(`上游视频任务失败：${getVideoUpstreamErrorDetail(data, responseText, '上游未返回失败原因')}`);
+    }
+    if (result.state === 'invalid') {
+      throw new Error(`上游轮询响应格式不兼容（HTTP ${response.status}）：${getVideoUpstreamErrorDetail(data, responseText, '任务已完成但未返回可用的视频地址')}`);
     }
     await waitForVideoPoll(intervalMs, signal);
   }
