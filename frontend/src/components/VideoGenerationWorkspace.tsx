@@ -337,6 +337,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const [customSeconds, setCustomSeconds] = useState('');
   const [durationMode, setDurationMode] = useState<'preset' | 'custom'>('preset');
   const [jobs, setJobs] = useState<StoredVideoJob[]>(() => loadVideoJobs());
+  const [copiedPromptJobId, setCopiedPromptJobId] = useState<string | null>(null);
   const [durationNowMs, setDurationNowMs] = useState(() => Date.now());
   const [submitting, setSubmitting] = useState(false);
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(new Set());
@@ -858,6 +859,29 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   }, []);
 
   /**
+   * 将视频任务实际发送给上游的完整提示词复制到系统剪贴板。
+   * @param job 待复制提示词的视频任务记录。
+   * @returns 无返回值；复制成功时显示成功提示和短暂的完成图标。
+   */
+  const copyVideoPrompt = useCallback(async (job: StoredVideoJob): Promise<void> => {
+    const effectivePrompt = job.effectivePrompt || job.prompt;
+    if (!effectivePrompt.trim()) return;
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error(t('task.copyPromptUnsupported'));
+      }
+      await navigator.clipboard.writeText(effectivePrompt);
+      setCopiedPromptJobId(job.id);
+      showToast(t('task.promptCopied'), 'success');
+      window.setTimeout(() => {
+        setCopiedPromptJobId(current => current === job.id ? null : current);
+      }, 2000);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('task.copyPromptFailed'), 'error');
+    }
+  }, [showToast, t]);
+
+  /**
    * 请求后端取消排队中或处理中的视频任务，并同步本地历史终态。
    * @param job 待取消的视频任务记录。
    * @returns 无返回值；取消结果通过任务状态和全局提示展示。
@@ -1191,7 +1215,20 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
             {job.status === 'completed' && job.videoUrl ? <video className="aspect-video w-full bg-black object-contain" src={job.videoUrl} controls preload="metadata" /> : <div className="flex aspect-video items-center justify-center bg-muted"><div className="flex items-center gap-2 text-sm text-muted-foreground">{job.status === 'failed' || job.status === 'cancelled' ? <X className="size-5 text-destructive" /> : <Loader2 className="size-5 animate-spin" />}{job.status === 'cancelled' ? t('video.cancelled') : job.status === 'failed' ? t('video.failed') : job.status === '排队中' ? t('video.queued') : t('video.processing')}</div></div>}
             <div className="space-y-3 p-3">
               {job.batchId && typeof job.batchIndex === 'number' && <p className="text-xs font-medium text-primary">{t('video.batchVideo', { index: job.batchIndex + 1 })}</p>}
-              <p className="line-clamp-3 whitespace-pre-line text-sm">{job.effectivePrompt || job.prompt}</p>
+              <div className="flex items-start gap-2">
+                <p className="min-w-0 flex-1 line-clamp-3 whitespace-pre-line text-sm">{job.effectivePrompt || job.prompt}</p>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0"
+                  onClick={() => void copyVideoPrompt(job)}
+                  disabled={!(job.effectivePrompt || job.prompt).trim()}
+                  title={t('task.copyPrompt')}
+                  aria-label={t('task.copyPrompt')}
+                >
+                  {copiedPromptJobId === job.id ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+                </Button>
+              </div>
               <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-y py-2 text-xs sm:grid-cols-4">
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.modelName')}</dt><dd className="truncate font-medium text-foreground" title={job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}>{job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.resolution')}</dt><dd className="font-medium text-foreground">{getVideoResolutionLabel(job.resolution)}</dd></div>

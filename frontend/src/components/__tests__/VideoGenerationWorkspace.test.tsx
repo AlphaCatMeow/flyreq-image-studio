@@ -391,6 +391,41 @@ describe('VideoGenerationWorkspace', () => {
     expect(within(taskCard!).getByText('1m 5s')).toBeInTheDocument();
   });
 
+  it('从视频任务卡片复制实际发送给上游的完整提示词', async () => {
+    localStorage.setItem('flyreq-video-jobs', JSON.stringify([{
+      id: 'copy-prompt-video-job',
+      serverTaskId: 'server-copy-prompt-task',
+      status: 'completed',
+      prompt: 'Shared main prompt',
+      promptVariant: 'Use a close-up shot',
+      effectivePrompt: 'Shared main prompt\n\nUse a close-up shot',
+      modelId: 'video-test',
+      resolution: 1080,
+      videoSize: '1920x1080',
+      seconds: 8,
+      referenceVideos: [],
+      referenceAudios: [],
+      referenceImages: [],
+      createdAt: '2026-07-29T08:00:00.000Z',
+    }]));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const showToast = vi.fn();
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={showToast} />
+      </LanguageProvider>,
+    );
+
+    const taskCard = screen.getByText('server-copy-prompt-task').closest('article');
+    expect(taskCard).not.toBeNull();
+    fireEvent.click(within(taskCard!).getByRole('button', { name: 'Copy the effective prompt' }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('Shared main prompt\n\nUse a close-up shot'));
+    expect(showToast).toHaveBeenCalledWith('Prompt copied', 'success');
+  });
+
   it('releases a restored video URL when the workspace unmounts before restoration finishes', async () => {
     localStorage.setItem('flyreq-video-jobs', JSON.stringify([{
       id: 'cached-late',
