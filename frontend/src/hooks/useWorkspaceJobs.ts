@@ -23,6 +23,16 @@ function isWaitingJob(job: StoredJob): boolean {
 }
 
 /**
+ * 记录图片工作区的非阻断持久化失败。
+ * @param error IndexedDB 或缓存清理任务抛出的错误。
+ * @returns undefined，便于直接用作 Promise catch 回调。
+ */
+function reportWorkspaceStorageError(error: unknown): undefined {
+  console.error('图片工作区浏览器存储操作失败', error);
+  return undefined;
+}
+
+/**
  * 加载本地任务，并修复无法继续追踪的旧等待任务与缺失模型、批次时间字段。
  * @returns 可直接用于工作区状态初始化的任务列表。
  */
@@ -76,8 +86,9 @@ export function useWorkspaceJobs() {
             }));
             setLoadedImages(new Set(imageMap.keys()));
           };
+          request.onerror = () => reportWorkspaceStorageError(request.error);
         })
-        .catch(() => undefined);
+        .catch(reportWorkspaceStorageError);
     }
   }, []);
 
@@ -113,7 +124,7 @@ export function useWorkspaceJobs() {
       next.add(job.id);
       return next;
     });
-    await saveImage(job).catch(() => undefined);
+    await saveImage(job).catch(reportWorkspaceStorageError);
   }, [persistJobs]);
 
   const failJob = useCallback(async (jobId: string, error: string, options?: FailJobOptions) => {
@@ -136,7 +147,7 @@ export function useWorkspaceJobs() {
     }));
 
     if (failedJob) {
-      await saveImage(failedJob).catch(() => undefined);
+      await saveImage(failedJob).catch(reportWorkspaceStorageError);
     }
   }, [persistJobs]);
 
@@ -152,8 +163,8 @@ export function useWorkspaceJobs() {
       return next;
     });
     await Promise.all([
-      deleteImage(jobId).catch(() => undefined),
-      deleteStoredBlobs(jobId, removedJob?.images?.length).catch(() => undefined),
+      deleteImage(jobId).catch(reportWorkspaceStorageError),
+      deleteStoredBlobs(jobId, removedJob?.images?.length).catch(reportWorkspaceStorageError),
     ]);
   }, [persistJobs]);
 
@@ -179,8 +190,8 @@ export function useWorkspaceJobs() {
     });
 
     await Promise.all(toRemove.flatMap(job => [
-      deleteImage(job.id).catch(() => undefined),
-      deleteStoredBlobs(job.id, job.images?.length).catch(() => undefined),
+      deleteImage(job.id).catch(reportWorkspaceStorageError),
+      deleteStoredBlobs(job.id, job.images?.length).catch(reportWorkspaceStorageError),
     ]));
     setClearAllDialogOpen(null);
   }, [persistJobs]);

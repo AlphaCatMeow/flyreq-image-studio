@@ -2,6 +2,7 @@ import { isGptImageModel } from '@/lib/gemini-config';
 import type { RefImageData } from '@/lib/job-store';
 import { supportsCustomSize, type GptImageBackground, type GptImageOutputFormat, type GptImageQuality, type GptImageStyle } from '@/lib/model-capabilities';
 import { getDefaultImageModel, getCompleteImageModels, loadRegistry } from '@/lib/flyreq-models';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
 export type GifModel = string;
 
@@ -35,7 +36,7 @@ export interface ActiveGifJob {
   updatedAt: string;
 }
 
-const STORAGE_KEY = 'flyreq-gif-active-job';
+const STORAGE_KEY = LOCAL_STORAGE_KEYS.gifActiveJob;
 const TEMPLATE_URL = '/togif.png';
 
 export const GIF_MAX_REF_IMAGES = 6;
@@ -71,8 +72,9 @@ export function saveActiveGifJob(job: ActiveGifJob | null): void {
       return;
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(job));
-  } catch {
-    // storage quota / privacy mode — keep working with in-memory state only
+  } catch (error) {
+    // 配额或隐私模式阻止写入时继续使用内存状态，同时保留诊断信息。
+    console.error('保存 GIF 任务到 localStorage 失败', error);
   }
 }
 

@@ -3,6 +3,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import Script from "next/script";
 import { ServiceWorkerManager } from "@/components/ServiceWorkerManager";
+import { LOCAL_STORAGE_KEYS } from "@/lib/storage-contract";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -23,6 +24,11 @@ export const metadata: Metadata = {
   },
 };
 
+/**
+ * 构建应用根布局，并在 React 水合前恢复主题、语言和宽屏偏好。
+ * @param children 当前路由需要渲染的页面内容。
+ * @returns 包含启动脚本、全局 Provider 与页面内容的 HTML 文档。
+ */
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -38,7 +44,7 @@ export default function RootLayout({
             __html: `
               (function() {
                 try {
-                  var theme = window.localStorage.getItem('theme');
+                  var theme = window.localStorage.getItem(${JSON.stringify(LOCAL_STORAGE_KEYS.theme)});
                   if (theme === 'dark' || theme === 'light') {
                     document.documentElement.setAttribute('data-theme', theme);
                   } else {
@@ -60,9 +66,9 @@ export default function RootLayout({
                 try {
                   var parts = window.location.pathname.split('/').filter(Boolean);
                   var urlLocale = parts[0] === 'zh' || parts[0] === 'en' ? parts[0] : '';
-                  var stored = window.localStorage.getItem('flyreq-locale');
+                  var stored = window.localStorage.getItem(${JSON.stringify(LOCAL_STORAGE_KEYS.locale)});
                   var locale = urlLocale || (stored === 'zh' || stored === 'en' ? stored : 'en');
-                  if (urlLocale) window.localStorage.setItem('flyreq-locale', urlLocale);
+                  if (urlLocale) window.localStorage.setItem(${JSON.stringify(LOCAL_STORAGE_KEYS.locale)}, urlLocale);
                   document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
                 } catch {
                   document.documentElement.lang = 'en';
@@ -78,7 +84,7 @@ export default function RootLayout({
             __html: `
               (function() {
                 try {
-                  var stored = window.localStorage.getItem('flyreq-wide-mode');
+                  var stored = window.localStorage.getItem(${JSON.stringify(LOCAL_STORAGE_KEYS.wideMode)});
                   var wide = stored === 'enabled' && window.innerWidth >= 1280;
                   if (wide) {
                     document.documentElement.setAttribute('data-wide-mode', '');

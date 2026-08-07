@@ -1,8 +1,10 @@
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
+
 export const LOCALES = ['en', 'zh'] as const;
 export type Locale = typeof LOCALES[number];
 
 export const DEFAULT_LOCALE: Locale = 'en';
-export const LOCALE_STORAGE_KEY = 'flyreq-locale';
+export const LOCALE_STORAGE_KEY = LOCAL_STORAGE_KEYS.locale;
 
 const dictionaries = {
   en: {

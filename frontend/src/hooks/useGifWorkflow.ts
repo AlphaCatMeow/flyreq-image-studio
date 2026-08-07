@@ -283,8 +283,9 @@ export function useGifWorkflow(): UseGifWorkflowResult {
     if (!target) return;
     try {
       await deleteStoredBlobs(target.id, 1);
-    } catch {
-      // ignore cleanup error
+    } catch (error) {
+      // 清理失败不阻断任务删除，但必须保留诊断信息以便处理残留 Blob。
+      console.error('清理 GIF 本地图片 Blob 失败', error);
     }
   }, []);
 

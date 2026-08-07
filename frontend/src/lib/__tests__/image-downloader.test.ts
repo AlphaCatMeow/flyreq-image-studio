@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   downloadAndStoreImages,
   fetchImageAsBlob,
+  getFallbackBlob,
   getStoredBlob,
+  setFallbackBlob,
   type ImageDownloadProgressItem,
 } from '@/lib/image-downloader';
 
@@ -111,5 +113,14 @@ describe('downloadAndStoreImages', () => {
     expect(result.items[0]).toMatchObject({ index: 0, status: 'cached', loadedBytes: 2, totalBytes: 2, percent: 100 });
     expect(progress.some(item => item.status === 'downloading' && item.percent === 100)).toBe(true);
     await expect(getStoredBlob('job-fallback', 0)).resolves.toMatchObject({ size: 2 });
+  });
+
+  it('内存降级缓存严格限制为 50 项', () => {
+    for (let index = 0; index <= 50; index += 1) {
+      setFallbackBlob(`capacity-${index}`, new Blob([String(index)]));
+    }
+
+    expect(getFallbackBlob('capacity-0')).toBeUndefined();
+    expect(getFallbackBlob('capacity-50')).toBeInstanceOf(Blob);
   });
 });

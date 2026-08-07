@@ -1,8 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
-export const NAVIGATION_COLLAPSED_STORAGE_KEY = 'flyreq-navigation-collapsed';
+export const NAVIGATION_COLLAPSED_STORAGE_KEY = LOCAL_STORAGE_KEYS.navigationCollapsed;
 const TABLET_NAVIGATION_MAX_WIDTH = 1279;
 
 /**

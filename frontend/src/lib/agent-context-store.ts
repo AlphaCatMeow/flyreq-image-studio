@@ -8,41 +8,38 @@
 import { storeImageBlob, getStoredBlob, deleteStoredBlobs } from '@/lib/image-downloader';
 import type { AgentMessage, AgentImageRecord, AgentProposal } from '@/lib/agent-chat-config';
 import type { GptImageBackground, GptImageOutputFormat, GptImageQuality, GptImageStyle } from '@/lib/model-capabilities';
+import { closeIndexedDbOnVersionChange, ensureIndexedDbSchema, INDEXED_DB } from '@/lib/storage-contract';
 
-const DB_NAME = 'flyreq-agent-db';
-const DB_VERSION = 1;
-const MESSAGES_STORE = 'messages';
-const IMAGES_STORE = 'images';
-const META_STORE = 'meta';
+const AGENT_DB_CONTRACT = INDEXED_DB.agent;
+const DB_NAME = AGENT_DB_CONTRACT.name;
+const DB_VERSION = AGENT_DB_CONTRACT.version;
+const MESSAGES_STORE = AGENT_DB_CONTRACT.stores[0].name;
+const IMAGES_STORE = AGENT_DB_CONTRACT.stores[1].name;
+const META_STORE = AGENT_DB_CONTRACT.stores[2].name;
 
 function openAgentDB(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onerror = () => resolve(null);
-    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(new Error('打开 Agent IndexedDB 失败', { cause: req.error }));
+    req.onsuccess = () => {
+      closeIndexedDbOnVersionChange(req.result);
+      resolve(req.result);
+    };
     req.onupgradeneeded = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains(MESSAGES_STORE)) {
-        db.createObjectStore(MESSAGES_STORE, { keyPath: 'id' });
-      }
-      if (!db.objectStoreNames.contains(IMAGES_STORE)) {
-        db.createObjectStore(IMAGES_STORE, { keyPath: 'imgId' });
-      }
-      if (!db.objectStoreNames.contains(META_STORE)) {
-        db.createObjectStore(META_STORE, { keyPath: 'key' });
-      }
+      const request = e.target as IDBOpenDBRequest;
+      ensureIndexedDbSchema(request.result, request.transaction, AGENT_DB_CONTRACT);
     };
   });
 }
 
 function getAll<T>(db: IDBDatabase, storeName: string): Promise<T[]> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const tx = db.transaction(storeName, 'readonly');
     const req = tx.objectStore(storeName).getAll();
     req.onsuccess = () => resolve((req.result as T[]) || []);
-    req.onerror = () => resolve([]);
+    req.onerror = () => reject(new Error(`读取 Agent store 失败：${storeName}`, { cause: req.error }));
   });
 }
 
@@ -55,93 +52,77 @@ export interface AgentSessionSnapshot {
 }
 
 export async function loadAgentSession(): Promise<AgentSessionSnapshot> {
-  const db = await openAgentDB();
-  if (!db) return { messages: [], images: [], imageModel: null };
+  return withAgentDB({ messages: [], images: [], imageModel: null }, async (db) => {
+    const [messages, images, meta] = await Promise.all([
+      getAll<AgentMessage>(db, MESSAGES_STORE),
+      getAll<AgentImageRecord>(db, IMAGES_STORE),
+      getAll<{ key: string; value: string }>(db, META_STORE),
+    ]);
 
-  const [messages, images, meta] = await Promise.all([
-    getAll<AgentMessage>(db, MESSAGES_STORE),
-    getAll<AgentImageRecord>(db, IMAGES_STORE),
-    getAll<{ key: string; value: string }>(db, META_STORE),
-  ]);
+    messages.sort((a, b) => a.createdAt - b.createdAt);
+    images.sort((a, b) => a.createdAt - b.createdAt);
+    const imageModel = meta.find(item => item.key === 'imageModel')?.value ?? null;
 
-  messages.sort((a, b) => a.createdAt - b.createdAt);
-  images.sort((a, b) => a.createdAt - b.createdAt);
-  const imageModel = meta.find(item => item.key === 'imageModel')?.value ?? null;
-
-  return { messages, images, imageModel };
+    return { messages, images, imageModel };
+  });
 }
 
 // ===== 消息读写 =====
 
 export async function putMessage(message: AgentMessage): Promise<void> {
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(MESSAGES_STORE, 'readwrite');
     tx.objectStore(MESSAGES_STORE).put(message);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('保存 Agent 消息失败', { cause: tx.error }));
+  }));
 }
 
 // ===== 图片登记表读写 =====
 
 export async function putImageRecord(record: AgentImageRecord): Promise<void> {
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(IMAGES_STORE, 'readwrite');
     tx.objectStore(IMAGES_STORE).put(record);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('保存 Agent 图片记录失败', { cause: tx.error }));
+  }));
 }
 
 // ===== 元信息 =====
 
 export async function saveImageModel(model: string): Promise<void> {
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(META_STORE, 'readwrite');
     tx.objectStore(META_STORE).put({ key: 'imageModel', value: model });
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('保存 Agent 图片模型失败', { cause: tx.error }));
+  }));
 }
 
 // ===== 撤回消息 =====
 
 export async function deleteMessages(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(MESSAGES_STORE, 'readwrite');
     const store = tx.objectStore(MESSAGES_STORE);
     for (const id of ids) store.delete(id);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('删除 Agent 消息失败', { cause: tx.error }));
+  }));
 }
 
 /** 从 flyreq-agent-db 中删除图片登记记录 */
 export async function deleteImageRecords(imgIds: string[]): Promise<void> {
   if (imgIds.length === 0) return;
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(IMAGES_STORE, 'readwrite');
     const store = tx.objectStore(IMAGES_STORE);
     for (const id of imgIds) store.delete(id);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('删除 Agent 图片记录失败', { cause: tx.error }));
+  }));
 }
 
 /** 从 flyreq-image-db 中删除 agent 图片的 blob 字节 */
@@ -152,17 +133,14 @@ export async function deleteAgentImageBytes(imgId: string): Promise<void> {
 // ===== 清空会话（清空重开） =====
 
 export async function clearAgentSession(): Promise<void> {
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction([MESSAGES_STORE, IMAGES_STORE, META_STORE], 'readwrite');
     tx.objectStore(MESSAGES_STORE).clear();
     tx.objectStore(IMAGES_STORE).clear();
     tx.objectStore(META_STORE).clear();
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('清空 Agent 会话失败', { cause: tx.error }));
+  }));
 }
 
 // ===== Pending Proposal 持久化（刷新恢复「等待你确认」状态）=====
@@ -179,22 +157,32 @@ export interface PendingProposalData {
 const PENDING_PROPOSAL_KEY = 'pendingProposal';
 
 export async function savePendingProposal(data: PendingProposalData): Promise<void> {
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(META_STORE, 'readwrite');
     tx.objectStore(META_STORE).put({ key: PENDING_PROPOSAL_KEY, value: JSON.stringify(data) });
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('保存 Agent 待确认提案失败', { cause: tx.error }));
+  }));
+}
+
+/**
+ * 在 Agent 数据库连接生命周期内执行一次操作，并确保连接最终关闭。
+ * @param fallback IndexedDB 不可用时返回的降级值。
+ * @param operation 使用已打开数据库执行的异步操作。
+ * @returns 操作结果或 IndexedDB 不可用时的降级值。
+ */
+async function withAgentDB<T>(fallback: T, operation: (db: IDBDatabase) => Promise<T>): Promise<T> {
+  const db = await openAgentDB();
+  if (!db) return fallback;
+  try {
+    return await operation(db);
+  } finally {
+    db.close();
+  }
 }
 
 export async function loadPendingProposal(): Promise<PendingProposalData | null> {
-  const db = await openAgentDB();
-  if (!db) return null;
-
-  return new Promise((resolve) => {
+  return withAgentDB<PendingProposalData | null>(null, (db) => new Promise<PendingProposalData | null>((resolve, reject) => {
     const tx = db.transaction(META_STORE, 'readonly');
     const req = tx.objectStore(META_STORE).get(PENDING_PROPOSAL_KEY);
     req.onsuccess = () => {
@@ -206,20 +194,17 @@ export async function loadPendingProposal(): Promise<PendingProposalData | null>
         resolve(null);
       }
     };
-    req.onerror = () => resolve(null);
-  });
+    req.onerror = () => reject(new Error('读取 Agent 待确认提案失败', { cause: req.error }));
+  }));
 }
 
 export async function clearPendingProposal(): Promise<void> {
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(META_STORE, 'readwrite');
     tx.objectStore(META_STORE).delete(PENDING_PROPOSAL_KEY);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('清除 Agent 待确认提案失败', { cause: tx.error }));
+  }));
 }
 
 // ===== Pending Generation 持久化（刷新恢复「正在生图」状态）=====
@@ -248,22 +233,16 @@ export interface PendingGenerationData {
 const PENDING_GENERATION_KEY = 'pendingGeneration';
 
 export async function savePendingGeneration(data: PendingGenerationData): Promise<void> {
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(META_STORE, 'readwrite');
     tx.objectStore(META_STORE).put({ key: PENDING_GENERATION_KEY, value: JSON.stringify(data) });
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('保存 Agent 待生成任务失败', { cause: tx.error }));
+  }));
 }
 
 export async function loadPendingGeneration(): Promise<PendingGenerationData | null> {
-  const db = await openAgentDB();
-  if (!db) return null;
-
-  return new Promise((resolve) => {
+  return withAgentDB<PendingGenerationData | null>(null, (db) => new Promise<PendingGenerationData | null>((resolve, reject) => {
     const tx = db.transaction(META_STORE, 'readonly');
     const req = tx.objectStore(META_STORE).get(PENDING_GENERATION_KEY);
     req.onsuccess = () => {
@@ -275,20 +254,17 @@ export async function loadPendingGeneration(): Promise<PendingGenerationData | n
         resolve(null);
       }
     };
-    req.onerror = () => resolve(null);
-  });
+    req.onerror = () => reject(new Error('读取 Agent 待生成任务失败', { cause: req.error }));
+  }));
 }
 
 export async function clearPendingGeneration(): Promise<void> {
-  const db = await openAgentDB();
-  if (!db) return;
-
-  return new Promise((resolve) => {
+  return withAgentDB(undefined, (db) => new Promise<void>((resolve, reject) => {
     const tx = db.transaction(META_STORE, 'readwrite');
     tx.objectStore(META_STORE).delete(PENDING_GENERATION_KEY);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
-  });
+    tx.onerror = () => reject(new Error('清除 Agent 待生成任务失败', { cause: tx.error }));
+  }));
 }
 
 // ===== 图片字节存取（复用 flyreq-image-db 的 blobs store）=====
@@ -314,16 +290,21 @@ interface UploadCacheRecord {
 function openUploadCacheDB(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') return Promise.resolve(null);
   return new Promise((resolve) => {
-    const req = indexedDB.open('flyreq-upload-cache', 1);
+    const req = indexedDB.open(INDEXED_DB.uploadCache.name, INDEXED_DB.uploadCache.version);
     req.onerror = () => resolve(null);
-    req.onsuccess = () => resolve(req.result);
+    req.onupgradeneeded = () => ensureIndexedDbSchema(req.result, req.transaction, INDEXED_DB.uploadCache);
+    req.onsuccess = () => {
+      closeIndexedDbOnVersionChange(req.result);
+      resolve(req.result);
+    };
   });
 }
 
 function getFromUploadCache(db: IDBDatabase, key: string): Promise<UploadCacheRecord | null> {
   return new Promise((resolve) => {
-    const tx = db.transaction('images', 'readonly');
-    const req = tx.objectStore('images').get(key);
+    const storeName = INDEXED_DB.uploadCache.stores[0].name;
+    const tx = db.transaction(storeName, 'readonly');
+    const req = tx.objectStore(storeName).get(key);
     req.onsuccess = () => resolve((req.result as UploadCacheRecord) || null);
     req.onerror = () => resolve(null);
   });
@@ -331,14 +312,12 @@ function getFromUploadCache(db: IDBDatabase, key: string): Promise<UploadCacheRe
 
 /** 从 flyreq-agent-db 的 images store 中查询单条图片登记记录 */
 export async function getAgentImageRecord(imgId: string): Promise<AgentImageRecord | null> {
-  const db = await openAgentDB();
-  if (!db) return null;
-  return new Promise((resolve) => {
+  return withAgentDB<AgentImageRecord | null>(null, (db) => new Promise<AgentImageRecord | null>((resolve) => {
     const tx = db.transaction(IMAGES_STORE, 'readonly');
     const req = tx.objectStore(IMAGES_STORE).get(imgId);
     req.onsuccess = () => resolve((req.result as AgentImageRecord) || null);
     req.onerror = () => resolve(null);
-  });
+  }));
 }
 
 export async function getAgentImageBytes(imgId: string): Promise<Blob | null> {

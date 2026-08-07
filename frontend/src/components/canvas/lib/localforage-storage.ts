@@ -1,16 +1,14 @@
 import localforage from "localforage";
 import type { StateStorage } from "zustand/middleware";
+import { LOCAL_FORAGE } from "@/lib/storage-contract";
 
-localforage.config({
-  name: "flyreq-image",
-  storeName: "canvas_app_state",
-});
+const canvasStateStore = localforage.createInstance(LOCAL_FORAGE.canvasState);
 
 export const localForageStorage: StateStorage = {
   getItem: async (name) => {
     if (typeof window === "undefined") return null;
     try {
-      return (await localforage.getItem<string>(name)) || null;
+      return (await canvasStateStore.getItem<string>(name)) || null;
     } catch {
       return window.localStorage.getItem(name);
     }
@@ -18,7 +16,7 @@ export const localForageStorage: StateStorage = {
   setItem: async (name, value) => {
     if (typeof window === "undefined") return;
     try {
-      await localforage.setItem(name, value);
+      await canvasStateStore.setItem(name, value);
     } catch {
       window.localStorage.setItem(name, value);
     }
@@ -26,7 +24,7 @@ export const localForageStorage: StateStorage = {
   removeItem: async (name) => {
     if (typeof window === "undefined") return;
     try {
-      await localforage.removeItem(name);
+      await canvasStateStore.removeItem(name);
     } catch {
       window.localStorage.removeItem(name);
     }

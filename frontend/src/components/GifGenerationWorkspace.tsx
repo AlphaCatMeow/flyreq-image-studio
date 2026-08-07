@@ -1,5 +1,7 @@
 'use client';
 
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Loader2 } from 'lucide-react';
@@ -52,7 +54,7 @@ interface GifGenerationWorkspaceProps {
   showToast?: (message: string, type: 'success' | 'error' | 'info') => void;
 }
 
-const SETTINGS_KEY = 'flyreq-gif-settings';
+const SETTINGS_KEY = LOCAL_STORAGE_KEYS.gifSettings;
 
 interface PersistedSettings {
   model: GifModel;

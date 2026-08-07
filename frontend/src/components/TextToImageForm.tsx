@@ -1,5 +1,7 @@
 'use client';
 
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
+
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowUp, FileText, Info, Save, Sparkles, X, Zap } from 'lucide-react';
@@ -70,7 +72,7 @@ interface TextToImageFormProps {
   };
 }
 
-const T2I_SETTINGS_KEY = 'flyreq-t2i-settings';
+const T2I_SETTINGS_KEY = LOCAL_STORAGE_KEYS.textToImageSettings;
 
 type T2ISettings = ImageFormSettings;
 

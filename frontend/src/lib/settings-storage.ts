@@ -1,8 +1,9 @@
 'use client';
 
 import { getCompleteImageModels, getCompleteTextModels, loadRegistry } from '@/lib/flyreq-models';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
-export const PROMPT_OPTIMIZE_ENABLED_KEY = 'flyreq-prompt-optimize-enabled';
+export const PROMPT_OPTIMIZE_ENABLED_KEY = LOCAL_STORAGE_KEYS.promptOptimizeEnabled;
 export const PROMPT_OPTIMIZE_SETTING_EVENT = 'flyreq-prompt-optimize-setting-updated';
 
 export function getStoredApiKey(): string {

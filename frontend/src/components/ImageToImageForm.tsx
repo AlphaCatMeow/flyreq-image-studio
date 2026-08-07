@@ -1,5 +1,7 @@
 'use client';
 
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
+
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { AttachmentChips } from './AttachmentChips';
@@ -58,7 +60,7 @@ import type { RefImageData, OutputSize, AspectRatio } from '@/lib/job-store';
 import type { ImageFormSettings } from '@/lib/form-settings';
 
 
-const I2I_SETTINGS_KEY = 'flyreq-i2i-settings';
+const I2I_SETTINGS_KEY = LOCAL_STORAGE_KEYS.imageToImageSettings;
 const MAX_ASSET_IMPORTS = 5;
 
 type I2ISettings = ImageFormSettings;

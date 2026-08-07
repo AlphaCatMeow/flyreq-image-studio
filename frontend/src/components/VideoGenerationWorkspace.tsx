@@ -221,8 +221,12 @@ function VideoReferenceImageChips({ files, onRemove, prompt }: VideoReferenceIma
       const preview = URL.createObjectURL(file);
       return { id: `${file.name}-${file.lastModified}`, name: file.name, preview, dataUrl: preview, mimeType: file.type };
     });
-    setAttachmentFiles(nextFiles);
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setAttachmentFiles(nextFiles);
+    });
     return () => {
+      cancelled = true;
       for (const file of nextFiles) URL.revokeObjectURL(file.preview);
     };
   }, [files]);
@@ -333,6 +337,7 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   const [customSeconds, setCustomSeconds] = useState('');
   const [durationMode, setDurationMode] = useState<'preset' | 'custom'>('preset');
   const [jobs, setJobs] = useState<StoredVideoJob[]>(() => loadVideoJobs());
+  const [copiedPromptJobId, setCopiedPromptJobId] = useState<string | null>(null);
   const [durationNowMs, setDurationNowMs] = useState(() => Date.now());
   const [submitting, setSubmitting] = useState(false);
   const [cancellingTaskIds, setCancellingTaskIds] = useState<Set<string>>(new Set());
@@ -351,9 +356,12 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
 
   useEffect(() => {
     if (!jobs.some(job => job.status === '排队中' || job.status === 'processing')) return;
-    setDurationNowMs(Date.now());
+    const initialUpdate = window.setTimeout(() => setDurationNowMs(Date.now()), 0);
     const timer = window.setInterval(() => setDurationNowMs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialUpdate);
+      window.clearInterval(timer);
+    };
   }, [jobs]);
 
   /**
@@ -409,28 +417,37 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
 
   /** 当模型或协议改变附件约束时，立即移除格式不兼容或超过数量上限的参考图。 */
   useEffect(() => {
+    let cancelled = false;
     const supportedImages = referenceImages.filter(file => isAllowedVideoReferenceMimeType(file.type, protocolProfile.references.imageMimeTypes));
     const nextImages = supportedImages.slice(0, maxReferenceImages);
     const removedUnsupportedImages = supportedImages.length !== referenceImages.length;
     const removedExcessImages = supportedImages.length > maxReferenceImages;
-    if (!removedUnsupportedImages && !removedExcessImages) return;
-    setReferenceImages(nextImages);
-    if (removedUnsupportedImages) showToast(t('video.unsupportedReferenceImageFormat'), 'error');
-    if (removedExcessImages) showToast(t('video.imageLimit', { max: maxReferenceImages }), 'error');
+    if (removedUnsupportedImages || removedExcessImages) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setReferenceImages(nextImages);
+        if (removedUnsupportedImages) showToast(t('video.unsupportedReferenceImageFormat'), 'error');
+        if (removedExcessImages) showToast(t('video.imageLimit', { max: maxReferenceImages }), 'error');
+      });
+    }
+    return () => { cancelled = true; };
   }, [maxReferenceImages, protocolProfile.references.imageMimeTypes, referenceImages, showToast, t]);
 
   /** 读取首张参考图尺寸，并在参考图移除或读取失败时退出参考尺寸模式。 */
   useEffect(() => {
     const image = referenceImages[0];
-    if (!image) {
-      setReferenceImageSize('');
-      if (sizeMode === 'reference') {
-        setSizeMode('preset');
-        setVideoSize(protocolProfile.parameters.size.values[0] || '1280x720');
-      }
-      return;
-    }
     let cancelled = false;
+    if (!image) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setReferenceImageSize('');
+        if (sizeMode === 'reference') {
+          setSizeMode('preset');
+          setVideoSize(protocolProfile.parameters.size.values[0] || '1280x720');
+        }
+      });
+      return () => { cancelled = true; };
+    }
     void readReferenceImageVideoSize(image).then(size => {
       if (cancelled) return;
       setReferenceImageSize(size);
@@ -441,16 +458,23 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
 
   /** 当模型或协议改变附件约束时，立即移除格式不兼容或超过数量上限的视频和音频。 */
   useEffect(() => {
+    let cancelled = false;
     const nextVideos = referenceVideos.filter(file => isAllowedVideoReferenceMimeType(file.type, protocolProfile.references.videoMimeTypes)).slice(0, maxReferenceVideos);
     const nextAudios = referenceAudios.filter(file => isAllowedVideoReferenceMimeType(file.type, protocolProfile.references.audioMimeTypes)).slice(0, maxReferenceAudios);
-    if (nextVideos.length !== referenceVideos.length) {
-      setReferenceVideos(nextVideos);
-      showToast(t('video.unsupportedReferenceVideo'), 'error');
+    if (nextVideos.length !== referenceVideos.length || nextAudios.length !== referenceAudios.length) {
+      queueMicrotask(() => {
+        if (cancelled) return;
+        if (nextVideos.length !== referenceVideos.length) {
+          setReferenceVideos(nextVideos);
+          showToast(t('video.unsupportedReferenceVideo'), 'error');
+        }
+        if (nextAudios.length !== referenceAudios.length) {
+          setReferenceAudios(nextAudios);
+          showToast(t('video.unsupportedReferenceAudio'), 'error');
+        }
+      });
     }
-    if (nextAudios.length !== referenceAudios.length) {
-      setReferenceAudios(nextAudios);
-      showToast(t('video.unsupportedReferenceAudio'), 'error');
-    }
+    return () => { cancelled = true; };
   }, [maxReferenceAudios, maxReferenceVideos, protocolProfile.references.audioMimeTypes, protocolProfile.references.videoMimeTypes, referenceAudios, referenceVideos, showToast, t]);
 
   useEffect(() => {
@@ -835,6 +859,29 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
   }, []);
 
   /**
+   * 将视频任务实际发送给上游的完整提示词复制到系统剪贴板。
+   * @param job 待复制提示词的视频任务记录。
+   * @returns 无返回值；复制成功时显示成功提示和短暂的完成图标。
+   */
+  const copyVideoPrompt = useCallback(async (job: StoredVideoJob): Promise<void> => {
+    const effectivePrompt = job.effectivePrompt || job.prompt;
+    if (!effectivePrompt.trim()) return;
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error(t('task.copyPromptUnsupported'));
+      }
+      await navigator.clipboard.writeText(effectivePrompt);
+      setCopiedPromptJobId(job.id);
+      showToast(t('task.promptCopied'), 'success');
+      window.setTimeout(() => {
+        setCopiedPromptJobId(current => current === job.id ? null : current);
+      }, 2000);
+    } catch (error) {
+      showToast(error instanceof Error ? error.message : t('task.copyPromptFailed'), 'error');
+    }
+  }, [showToast, t]);
+
+  /**
    * 请求后端取消排队中或处理中的视频任务，并同步本地历史终态。
    * @param job 待取消的视频任务记录。
    * @returns 无返回值；取消结果通过任务状态和全局提示展示。
@@ -1168,7 +1215,20 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
             {job.status === 'completed' && job.videoUrl ? <video className="aspect-video w-full bg-black object-contain" src={job.videoUrl} controls preload="metadata" /> : <div className="flex aspect-video items-center justify-center bg-muted"><div className="flex items-center gap-2 text-sm text-muted-foreground">{job.status === 'failed' || job.status === 'cancelled' ? <X className="size-5 text-destructive" /> : <Loader2 className="size-5 animate-spin" />}{job.status === 'cancelled' ? t('video.cancelled') : job.status === 'failed' ? t('video.failed') : job.status === '排队中' ? t('video.queued') : t('video.processing')}</div></div>}
             <div className="space-y-3 p-3">
               {job.batchId && typeof job.batchIndex === 'number' && <p className="text-xs font-medium text-primary">{t('video.batchVideo', { index: job.batchIndex + 1 })}</p>}
-              <p className="line-clamp-3 whitespace-pre-line text-sm">{job.effectivePrompt || job.prompt}</p>
+              <div className="flex items-start gap-2">
+                <p className="min-w-0 flex-1 line-clamp-3 whitespace-pre-line text-sm">{job.effectivePrompt || job.prompt}</p>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  className="shrink-0"
+                  onClick={() => void copyVideoPrompt(job)}
+                  disabled={!(job.effectivePrompt || job.prompt).trim()}
+                  title={t('task.copyPrompt')}
+                  aria-label={t('task.copyPrompt')}
+                >
+                  {copiedPromptJobId === job.id ? <Check className="size-4 text-success" /> : <Copy className="size-4" />}
+                </Button>
+              </div>
               <dl className="grid min-w-0 grid-cols-2 gap-x-3 gap-y-2 border-y py-2 text-xs sm:grid-cols-4">
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.modelName')}</dt><dd className="truncate font-medium text-foreground" title={job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}>{job.modelName || models.find(model => model.id === job.modelId)?.name || job.modelId}</dd></div>
                 <div className="min-w-0"><dt className="text-muted-foreground">{t('video.resolution')}</dt><dd className="font-medium text-foreground">{getVideoResolutionLabel(job.resolution)}</dd></div>

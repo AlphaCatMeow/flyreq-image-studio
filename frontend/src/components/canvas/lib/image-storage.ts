@@ -4,6 +4,7 @@ import localforage from "localforage";
 
 import { nanoid } from "nanoid";
 import { readImageMeta } from "./image-utils";
+import { LOCAL_FORAGE } from "@/lib/storage-contract";
 
 export type UploadedImage = {
   url: string;
@@ -14,7 +15,7 @@ export type UploadedImage = {
   mimeType: string;
 };
 
-const store = localforage.createInstance({ name: "flyreq-image", storeName: "canvas_image_files" });
+const store = localforage.createInstance(LOCAL_FORAGE.canvasImages);
 const objectUrls = new Map<string, string>();
 
 /** 本地存储图片 blob（命名沿用 uploadImage，但全程纯前端 IndexedDB，不上传服务端）。 */

@@ -21,6 +21,7 @@ import {
   isValidVideoSize,
 } from '@/lib/video-config';
 import { composeEffectiveVideoPrompt } from '@/lib/video-prompt-variants';
+import { saveVideoJobs } from '@/lib/video-job-store';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const serverSource = fs.readFileSync(path.resolve(testDir, '../../../../backend/server.js'), 'utf8');
@@ -35,6 +36,7 @@ describe('逐视频附加提示词', () => {
 
 describe('视频模型注册表与工作台配置', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     localStorage.clear();
     applyDeploymentDefaultVideoModel();
     applyVideoWorkspaceConfig();
@@ -47,6 +49,15 @@ describe('视频模型注册表与工作台配置', () => {
     expect(registry.videoModels[0]).toEqual(expect.objectContaining({ modelId: '', usesPresetModelId: true, presetModelId: 'sora-2', protocol: 'openai' }));
     expect(getResolvedVideoModelId(registry.videoModels[0])).toBe('sora-2');
     expect(registry.defaults).toHaveProperty('videoGeneration');
+  });
+
+  it('视频历史持久化失败时保留内存工作流且记录错误', () => {
+    const storageError = new DOMException('quota exceeded', 'QuotaExceededError');
+    vi.spyOn(localStorage, 'setItem').mockImplementation(() => { throw storageError; });
+    const errorLogger = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(() => saveVideoJobs([])).not.toThrow();
+    expect(errorLogger).toHaveBeenCalledWith('保存视频任务历史到 localStorage 失败', storageError);
   });
 
   it('把注册表 v1 的 openai 视频模型迁移为隐藏的旧兼容协议', () => {

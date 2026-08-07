@@ -10,7 +10,7 @@ interface FallbackEntry {
 const blobFallbackStore = new Map<string, FallbackEntry>();
 
 function evictOldestIfNeeded() {
-  if (blobFallbackStore.size <= MAX_FALLBACK_STORE_SIZE) return;
+  if (blobFallbackStore.size < MAX_FALLBACK_STORE_SIZE) return;
   // 找到最久未访问的条目并删除
   let oldestKey: string | null = null;
   let oldestTime = Infinity;
@@ -259,7 +259,7 @@ export async function deleteStoredBlobs(jobId: string, imageCount?: number): Pro
   const db = await openImageDb();
   if (!db || !db.objectStoreNames.contains(BLOBS_STORE)) return;
 
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(BLOBS_STORE, 'readwrite');
     const store = tx.objectStore(BLOBS_STORE);
 
@@ -281,7 +281,7 @@ export async function deleteStoredBlobs(jobId: string, imageCount?: number): Pro
     }
 
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
+    tx.onerror = () => reject(new Error('删除本地图片 Blob 失败', { cause: tx.error }));
   });
 }
 

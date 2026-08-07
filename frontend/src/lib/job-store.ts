@@ -1,6 +1,7 @@
 import type { GptImageBackground, GptImageOutputFormat, GptImageQuality, GptImageStyle } from '@/lib/model-capabilities';
 import { makeStoredBlobRef, type ImageDownloadProgressItem } from '@/lib/image-downloader';
 import { openImageDb, IMG_STORE } from '@/lib/image-db';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
 export type Mode = 'text-to-image' | 'image-to-image' | 'prompt-gallery';
 export type OutputSize = 'auto' | '512' | '1K' | '2K' | '4K';
@@ -67,7 +68,7 @@ export interface StoredJob {
   imageDownloadProgress?: ImageDownloadProgress;
 }
 
-const JOBS_KEY = 'flyreq-jobs';
+const JOBS_KEY = LOCAL_STORAGE_KEYS.imageJobs;
 
 // 复用单例连接层；保留这两个导出名以兼容现有调用方（如 useWorkspaceJobs）。
 export { IMG_STORE };
@@ -162,7 +163,7 @@ export async function saveImage(result: StoredJob) {
 
   const images = toPersistedImageRefs(result);
 
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(IMG_STORE, 'readwrite');
     tx.objectStore(IMG_STORE).put({
       id: result.id,
@@ -174,7 +175,7 @@ export async function saveImage(result: StoredJob) {
       error: result.error,
     });
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
+    tx.onerror = () => reject(new Error('保存图片任务索引失败', { cause: tx.error }));
   });
 }
 
@@ -182,11 +183,11 @@ export async function deleteImage(jobId: string) {
   const db = await openDB();
   if (!db) return;
 
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
     const tx = db.transaction(IMG_STORE, 'readwrite');
     tx.objectStore(IMG_STORE).delete(jobId);
     tx.oncomplete = () => resolve();
-    tx.onerror = () => resolve();
+    tx.onerror = () => reject(new Error('删除图片任务索引失败', { cause: tx.error }));
   });
 }
 
@@ -213,7 +214,8 @@ export function saveJobs(jobs: StoredJob[]) {
   });
   try {
     localStorage.setItem(JOBS_KEY, JSON.stringify(lightweight));
-  } catch {
-    // Keep the in-memory job list usable when storage quota or browser policy blocks writes.
+  } catch (error) {
+    // 浏览器拒绝持久化时保留内存任务，同时留下可诊断错误。
+    console.error('保存图片任务历史到 localStorage 失败', error);
   }
 }

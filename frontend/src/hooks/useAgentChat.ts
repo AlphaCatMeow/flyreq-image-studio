@@ -45,6 +45,7 @@ import {
 } from '@/lib/agent-context-store';
 import { getDefaultConfiguredTextModel } from '@/lib/model-endpoints';
 import { useI18n } from '@/components/LanguageProvider';
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
 
 export type AgentPhase = 'idle' | 'loading' | 'describing' | 'streaming' | 'proposal' | 'generating';
 
@@ -70,6 +71,15 @@ export interface PendingUpload {
 }
 
 const PREVIEW_MAX_SIDE = 512;
+
+/**
+ * 观察后台 Agent 持久化任务，避免真实存储错误变成未处理的 Promise。
+ * @param task 待观察的异步存储任务。
+ * @returns 无返回值；失败原因会写入浏览器错误日志。
+ */
+function observeAgentStorageTask(task: Promise<unknown>): void {
+  void task.catch((error) => console.error('Agent 浏览器存储操作失败', error));
+}
 
 /** 构建当前可用的图像模型目录，供 Agent 选择模型 */
 function buildModelCatalog(): AgentModelCatalogEntry[] {
@@ -201,10 +211,10 @@ export function useAgentChat() {
   const [generationDraft, setGenerationDraft] = useState<AgentGenerationDraft | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [webSearchEnabled, setWebSearchEnabled] = useState(() =>
-    getLocalStorageItem('flyreq-agent-web-search') === 'true'
+    getLocalStorageItem(LOCAL_STORAGE_KEYS.agentWebSearch) === 'true'
   );
   const [intentRecognition, setIntentRecognition] = useState(() =>
-    getLocalStorageItem('flyreq-agent-intent-recognition') !== 'false'
+    getLocalStorageItem(LOCAL_STORAGE_KEYS.agentIntentRecognition) !== 'false'
   );
 
   const streamHandleRef = useRef<StreamAgentHandle | null>(null);
@@ -316,19 +326,25 @@ export function useAgentChat() {
       }
 
       setReady(true);
-    })();
+    })().catch((error) => {
+      console.error('恢复 Agent 浏览器存储状态失败', error);
+      if (!cancelled) {
+        setError(error instanceof Error ? error.message : '恢复 Agent 本地状态失败');
+        setReady(true);
+      }
+    });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const appendMessage = useCallback((message: AgentMessage) => {
     setMessages(prev => [...prev, message]);
-    void putMessage(message);
+    observeAgentStorageTask(putMessage(message));
   }, []);
 
   const registerImage = useCallback((record: AgentImageRecord) => {
     setImages(prev => [...prev, record]);
-    void putImageRecord(record);
+    observeAgentStorageTask(putImageRecord(record));
   }, []);
 
   const nextImgId = useCallback(() => {
@@ -403,7 +419,7 @@ export function useAgentChat() {
     const description = newDescription;
     const updated: AgentImageRecord = { ...record, description };
     setImages(prev => prev.map(img => img.imgId === imgId ? updated : img));
-    void putImageRecord(updated);
+    observeAgentStorageTask(putImageRecord(updated));
     return description;
   }, [getAgentTextModelConfig, images, locale]);
 
@@ -458,7 +474,7 @@ export function useAgentChat() {
             if (resolvedModel !== imageModelRef.current) {
               imageModelRef.current = resolvedModel;
               setImageModelState(resolvedModel);
-              void saveImageModel(resolvedModel);
+              observeAgentStorageTask(saveImageModel(resolvedModel));
             }
             // 有提案：不保存为单独消息，暂存分析文本供生图成功后合并
             pendingAnalysisRef.current = text;
@@ -467,12 +483,12 @@ export function useAgentChat() {
             setProposal(parsedProposal);
             setPhase('proposal');
             // 持久化 pending proposal，刷新页面后可以恢复
-            void savePendingProposal({
+            observeAgentStorageTask(savePendingProposal({
               proposal: parsedProposal,
               pendingAnalysis: text,
               pendingReasoning: reasoning,
               isReedit: false,
-            });
+            }));
           } else {
             // 纯文本回复：正常保存为消息
             if (text.length > 0) {
@@ -510,7 +526,7 @@ export function useAgentChat() {
     pendingAnalysisRef.current = '';
     pendingReasoningRef.current = '';
     isReeditRef.current = false;
-    void clearPendingProposal();
+    observeAgentStorageTask(clearPendingProposal());
 
     const uploadedRecords: AgentImageRecord[] = [];
     const linkedIds: string[] = [];
@@ -582,7 +598,7 @@ export function useAgentChat() {
     // 二次编辑取消时不标记为可撤回，防止误操作删除已有图片
     const wasReedit = isReeditRef.current;
     isReeditRef.current = false;
-    void clearPendingProposal();
+    observeAgentStorageTask(clearPendingProposal());
     if (analysis) {
       appendMessage({
         id: generateUUID(),
@@ -611,7 +627,7 @@ export function useAgentChat() {
         if (prev[i].role === 'user') { start = i; break; }
       }
       const removed = prev.slice(start);
-      void deleteMessages(removed.map(m => m.id));
+      observeAgentStorageTask(deleteMessages(removed.map(m => m.id)));
       return prev.slice(0, start);
     });
   }, []);
@@ -712,7 +728,7 @@ export function useAgentChat() {
       proposalData: ctx.proposalData,
       createdAt: Date.now(),
     });
-    void clearPendingGeneration();
+    observeAgentStorageTask(clearPendingGeneration());
     setGeneratingTaskId(null);
     setGeneratingStartedAt(null);
     setGenerationDraft(null);
@@ -750,7 +766,7 @@ export function useAgentChat() {
         },
       });
     } catch (err) {
-      void clearPendingGeneration();
+      observeAgentStorageTask(clearPendingGeneration());
       setError(err instanceof Error ? err.message : '生图失败');
       setProposal({
         action: data.proposal?.action ?? (data.selectedImageIds.length > 0 ? 'edit' : 'generate'),
@@ -829,7 +845,7 @@ export function useAgentChat() {
     };
     proposalRef.current = approvedProposal;
     setProposal(null);
-    void clearPendingProposal();
+    observeAgentStorageTask(clearPendingProposal());
     setPhase('generating');
     setGeneratingStartedAt(startedAt);
     setGenerationDraft({
@@ -870,7 +886,7 @@ export function useAgentChat() {
       });
       setGeneratingTaskId(taskId);
       setGenerationDraft(prev => prev ? { ...prev, taskId } : prev);
-      void savePendingGeneration({
+      observeAgentStorageTask(savePendingGeneration({
         taskId,
         proposal: approvedProposal,
         pendingAnalysis: pendingAnalysisRef.current,
@@ -887,7 +903,7 @@ export function useAgentChat() {
         gptImageOutputFormat: params.gptImageOutputFormat,
         parallelCount: params.parallelCount,
         startedAt,
-      });
+      }));
 
       const task = await pollTask(taskId);
       if (!mountedRef.current) return;
@@ -915,7 +931,7 @@ export function useAgentChat() {
         },
       });
     } catch (err) {
-      void clearPendingGeneration();
+      observeAgentStorageTask(clearPendingGeneration());
       setError(err instanceof Error ? err.message : '生图失败');
       setProposal({
         action: approvedProposal.action,
@@ -955,8 +971,8 @@ export function useAgentChat() {
     setIsSyncing(false);
     setPhase('idle');
     describeAbortRef.current?.abort();
-    void clearPendingProposal();
-    void clearPendingGeneration();
+    observeAgentStorageTask(clearPendingProposal());
+    observeAgentStorageTask(clearPendingGeneration());
   }, [flushAndCancelRaf]);
 
   const skipDescribing = useCallback(() => {
@@ -966,13 +982,13 @@ export function useAgentChat() {
 
   const setImageModel = useCallback((model: ModelId) => {
     setImageModelState(model);
-    void saveImageModel(model);
+    observeAgentStorageTask(saveImageModel(model));
   }, []);
 
   const toggleWebSearch = useCallback(() => {
     setWebSearchEnabled(prev => {
       const next = !prev;
-      try { localStorage.setItem('flyreq-agent-web-search', String(next)); } catch { /* ignore */ }
+      try { localStorage.setItem(LOCAL_STORAGE_KEYS.agentWebSearch, String(next)); } catch { /* 存储不可用时保留内存状态 */ }
       return next;
     });
   }, []);
@@ -980,7 +996,7 @@ export function useAgentChat() {
   const toggleIntentRecognition = useCallback(() => {
     setIntentRecognition(prev => {
       const next = !prev;
-      try { localStorage.setItem('flyreq-agent-intent-recognition', String(next)); } catch { /* ignore */ }
+      try { localStorage.setItem(LOCAL_STORAGE_KEYS.agentIntentRecognition, String(next)); } catch { /* 存储不可用时保留内存状态 */ }
       return next;
     });
   }, []);
@@ -998,7 +1014,7 @@ export function useAgentChat() {
         text: '以下为新对话，助手已不记得上文',
         createdAt: Date.now(),
       };
-      void putMessage(divider);
+      observeAgentStorageTask(putMessage(divider));
       return [...prev, divider];
     });
     setProposal(null);
@@ -1011,7 +1027,12 @@ export function useAgentChat() {
     pollAbortRef.current = true;
     pollWakeRef.current?.();
     describeAbortRef.current?.abort();
-    await clearAgentSession();
+    try {
+      await clearAgentSession();
+    } catch (error) {
+      setError(error instanceof Error ? error.message : '清空 Agent 本地会话失败');
+      return;
+    }
     setMessages([]);
     setImages([]);
     setProposal(null);
@@ -1066,7 +1087,7 @@ export function useAgentChat() {
     if (resolvedModel !== imageModelRef.current) {
       imageModelRef.current = resolvedModel;
       setImageModelState(resolvedModel);
-      void saveImageModel(resolvedModel);
+      observeAgentStorageTask(saveImageModel(resolvedModel));
     }
     // 清除上次待定分析，因为用户要重新编辑
     pendingAnalysisRef.current = '';
@@ -1074,12 +1095,12 @@ export function useAgentChat() {
     isReeditRef.current = true;
     setProposal(newProposal);
     setPhase('proposal');
-    void savePendingProposal({
+    observeAgentStorageTask(savePendingProposal({
       proposal: newProposal,
       pendingAnalysis: '',
       pendingReasoning: '',
       isReedit: true,
-    });
+    }));
   }, [messages]);
 
   /** 清理指定消息引用的且不再被其他消息使用的图片 */
@@ -1089,7 +1110,7 @@ export function useAgentChat() {
       const stillReferenced = keptMessages.some(m => m.imageIds?.includes(imgId));
       if (!stillReferenced) {
         setImages(prev => prev.filter(img => img.imgId !== imgId));
-        void deleteImageRecords([imgId]);
+        observeAgentStorageTask(deleteImageRecords([imgId]));
         void deleteAgentImageBytes(imgId);
       }
     }
@@ -1101,7 +1122,7 @@ export function useAgentChat() {
     if (!message) return;
     const removedImageIds = message.imageIds || [];
     setMessages(prev => prev.filter(m => m.id !== messageId));
-    void deleteMessages([messageId]);
+    observeAgentStorageTask(deleteMessages([messageId]));
     cleanupOrphanImages(messages.filter(m => m.id !== messageId), removedImageIds);
   }, [messages, cleanupOrphanImages]);
 
@@ -1112,11 +1133,11 @@ export function useAgentChat() {
     const toRemove = messages.slice(fromIndex);
     const removedImageIds = toRemove.flatMap(m => m.imageIds || []);
     setMessages(prev => prev.slice(0, fromIndex));
-    void deleteMessages(toRemove.map(m => m.id));
+    observeAgentStorageTask(deleteMessages(toRemove.map(m => m.id)));
     cleanupOrphanImages(messages.slice(0, fromIndex), removedImageIds);
     // 如果当前在 proposal 阶段且涉及被删除的上下文，重置
     setProposal(null);
-    void clearPendingProposal();
+    observeAgentStorageTask(clearPendingProposal());
     flushAndCancelRaf();
     setStreamingText('');
     setStreamingReasoning('');

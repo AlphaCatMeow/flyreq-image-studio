@@ -1,5 +1,7 @@
 'use client';
 
+import { LOCAL_STORAGE_KEYS } from '@/lib/storage-contract';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Loader2,
@@ -44,7 +46,7 @@ interface GifFrameTunerProps {
 
 const IDENTITY: FrameTransform = { offsetX: 0, offsetY: 0, scale: 1, rotation: 0 };
 const BG_PRESETS = ['#000000', '#ffffff'];
-const MOBILE_HINT_STORAGE_KEY = 'flyreq-gif-tuner-mobile-hint-hidden';
+const MOBILE_HINT_STORAGE_KEY = LOCAL_STORAGE_KEYS.gifTunerMobileHintHidden;
 
 function isEdited(t: FrameTransform): boolean {
   return t.offsetX !== 0 || t.offsetY !== 0 || t.scale !== 1 || t.rotation !== 0;
