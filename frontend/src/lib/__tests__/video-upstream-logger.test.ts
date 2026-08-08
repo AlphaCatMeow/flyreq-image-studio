@@ -32,6 +32,33 @@ describe('视频上游日志脱敏', () => {
     expect(sanitizedUrl).toContain('sig****1234');
   });
 
+  it('脱敏 Cookie 和 Set-Cookie 中所有分号分隔的敏感值', () => {
+    const firstSecret = 'first-cookie-secret';
+    const secondSecret = 'second-cookie-secret';
+    const commaSecret = 'comma-cookie-secret';
+    const cookieText = logger.sanitizeVideoLogText(
+      `Cookie: session=${firstSecret}; refresh=${secondSecret}; theme=dark`,
+    );
+    const setCookieText = logger.sanitizeVideoLogText(
+      `Set-Cookie: session=${firstSecret}; Path=/; HttpOnly; refresh=${secondSecret}`,
+    );
+    const combinedSetCookieText = logger.sanitizeVideoLogText(
+      `Set-Cookie: session=${firstSecret}; Expires=Wed, 21 Oct 2015 07:28:00 GMT, csrf=${commaSecret}; Secure`,
+    );
+
+    expect(cookieText).not.toContain(firstSecret);
+    expect(cookieText).not.toContain(secondSecret);
+    expect(cookieText).toContain('session=fir****cret');
+    expect(cookieText).toContain('refresh=sec****cret');
+    expect(setCookieText).not.toContain(firstSecret);
+    expect(setCookieText).not.toContain(secondSecret);
+    expect(setCookieText).toContain('Path=/');
+    expect(setCookieText).toContain('HttpOnly');
+    expect(combinedSetCookieText).not.toContain(commaSecret);
+    expect(combinedSetCookieText).toContain('Expires=Wed, 21 Oct 2015 07:28:00 GMT');
+    expect(combinedSetCookieText).toContain('csrf=com****cret');
+  });
+
   it('递归脱敏 JSON 请求与响应中的敏感字段', () => {
     const requestSecret = 'request-secret-abcd';
     const responseSecret = 'response-secret-wxyz';

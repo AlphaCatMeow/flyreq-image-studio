@@ -123,7 +123,7 @@ function validateResolvedModelProfiles(config, protocol) {
         validateProtocolProfile(protocol, resolved);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        throw new Error(`视频模型能力规则合并结果无效: ${protocol}/${rule.modelPrefix || '*'}（${reason}）`);
+        throw new Error(`视频模型能力规则合并结果无效: ${protocol}/${rule.modelPrefix || '*'}（${reason}）`, { cause: error });
       }
     }
   }

@@ -10,6 +10,7 @@ const Busboy = require('busboy');
 const { Readable } = require('stream');
 const { pipeline } = require('stream/promises');
 const { createXaiImagineRequestInit, getXaiImagineEndpoint } = require('./xai-imagine');
+const { flushDailyFileLogs, installDailyFileLogger, isDailyFileLogEnabled } = require('./daily-file-logger');
 const { createVideoRequest, formatVideoResolution, getCreatedVideoTaskId, getVideoDownloadHeaders, getVideoPollPath, normalizeVideoPollResult } = require('./video-protocols');
 const { isPublicVideoProtocol, isVideoProtocol, resolveVideoProtocolConfig, validateVideoProtocolReferences, validateVideoProtocolRequest } = require('./video-protocol-config');
 const {
@@ -179,6 +180,10 @@ function installTimestampedConsole() {
 }
 
 installTimestampedConsole();
+installDailyFileLogger({
+  enabled: isDailyFileLogEnabled(process.env.FLYREQ_FILE_LOG_ENABLED),
+  logDir: process.env.FLYREQ_LOG_DIR,
+});
 
 function normalizeBaseUrl(url) {
   return String(url || '').trim().replace(/\/+$/, '');
@@ -402,6 +407,7 @@ const DB_PATH = process.env.FLYREQ_TASK_DB || path.join(__dirname, 'flyreq-tasks
 const TASK_TTL_MS = 12 * 60 * 60 * 1000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
+const DEFAULT_REMOTE_IMAGE_MAX_BYTES = 50 * 1024 * 1024;
 const XAI_IMAGINE_MAX_REQUESTS_PER_SECOND = 5;
 const XAI_IMAGINE_REQUEST_INTERVAL_MS = 1000 / XAI_IMAGINE_MAX_REQUESTS_PER_SECOND;
 const XAI_IMAGINE_MAX_RETRIES = 1;
@@ -463,6 +469,7 @@ const WS_PONG_GRACE_MS = 10 * 1000;
 // 防止一条消息被放大成大量 DB 查询（DoS 面）。
 const WS_MAX_TASK_IDS_PER_MESSAGE = 200;
 const WS_MAX_SUBSCRIPTIONS_PER_SOCKET = 500;
+const WS_MAX_PAYLOAD_BYTES = 64 * 1024;
 let queueBroadcastTimer = null;
 let queueBroadcastPending = false;
 
@@ -860,15 +867,20 @@ function getQueueStats() {
 
 // ===== Image Storage Service =====
 
+/**
+ * 确保图片结果目录可写，失败时记录错误并交由启动流程安全退出。
+ * @returns {boolean} 目录可用时返回 true，创建失败时返回 false。
+ */
 function ensureImageDir() {
   try {
     if (!fs.existsSync(IMAGE_DIR)) {
       fs.mkdirSync(IMAGE_DIR, { recursive: true });
     }
     console.log(`[image-storage] 图片存储目录: ${IMAGE_DIR}`);
+    return true;
   } catch (error) {
     console.error(`[image-storage] 无法创建图片存储目录: ${IMAGE_DIR}`, error);
-    process.exit(1);
+    return false;
   }
 }
 
@@ -897,15 +909,16 @@ function saveImageToDisk(taskId, itemIndex, subIndex, imageBuffer, mimeType) {
 
 /**
  * 确保视频结果目录存在，目录不可用时终止启动以避免产生不可取回任务。
- * @returns 无返回值。
+ * @returns {boolean} 目录可用时返回 true，创建失败时返回 false。
  */
 function ensureVideoDir() {
   try {
     if (!fs.existsSync(VIDEO_DIR)) fs.mkdirSync(VIDEO_DIR, { recursive: true });
     console.log(`[video-storage] 视频存储目录: ${VIDEO_DIR}`);
+    return true;
   } catch (error) {
     console.error(`[video-storage] 无法创建视频存储目录: ${VIDEO_DIR}`, error);
-    process.exit(1);
+    return false;
   }
 }
 
@@ -1160,9 +1173,47 @@ async function downloadUrlToDisk(taskId, itemIndex, subIndex, imageUrl, options 
     throw new Error(`远程图片下载失败: ${response.status}`);
   }
   const contentType = response.headers.get('content-type') || 'image/png';
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const maxBytes = parseIntegerEnv(getRuntimeEnv().FLYREQ_REMOTE_IMAGE_MAX_BYTES, DEFAULT_REMOTE_IMAGE_MAX_BYTES, {
+    min: 1024,
+    max: 200 * 1024 * 1024,
+  });
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    await response.body?.cancel();
+    throw new Error(`远程图片超过大小限制：最大 ${maxBytes} 字节`);
+  }
+  const buffer = await readResponseBufferWithLimit(response, maxBytes);
   const normalized = await enforceGeneratedImageLayout(buffer, contentType, options.request || {});
   return saveImageToDisk(taskId, itemIndex, subIndex, normalized.buffer, normalized.mimeType);
+}
+
+/**
+ * 流式读取远程响应，并在超过字节上限时立即取消响应体。
+ * @param {Response} response 已成功返回的远程图片响应。
+ * @param {number} maxBytes 允许读取的最大字节数。
+ * @returns {Promise<Buffer>} 未超过限制的完整响应体。
+ */
+async function readResponseBufferWithLimit(response, maxBytes) {
+  if (!response.body) return Buffer.alloc(0);
+  const reader = response.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const chunk = Buffer.from(value);
+      totalBytes += chunk.length;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        throw new Error(`远程图片超过大小限制：最大 ${maxBytes} 字节`);
+      }
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks, totalBytes);
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 function getTaskImageFiles(taskId) {
@@ -1257,6 +1308,8 @@ function initDatabase() {
 }
 
 function sendJson(res, statusCode, body, extraHeaders = {}) {
+  // 客户端中止请求后响应可能已经销毁；错误处理不能再次写入已关闭的响应流。
+  if (res.destroyed || res.writableEnded) return;
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
@@ -1359,12 +1412,15 @@ const MAX_REQUEST_BODY_BYTES = 10 * 1024 * 1024; // 10MB
 function readJsonBody(req) {
   return new Promise((resolve, reject) => {
     let raw = '';
+    let rawBytes = 0;
     let aborted = false;
     req.setEncoding('utf8');
     req.on('data', chunk => {
       if (aborted) return;
       raw += chunk;
-      if (raw.length > MAX_REQUEST_BODY_BYTES) {
+      // 限制必须按 UTF-8 实际字节数计算，避免多字节字符绕过内存上限。
+      rawBytes += Buffer.byteLength(chunk, 'utf8');
+      if (rawBytes > MAX_REQUEST_BODY_BYTES) {
         aborted = true;
         raw = ''; // 释放已缓冲内存
         // 不再 req.destroy()：直接重置连接会让客户端收到 ERR_CONNECTION_RESET，
@@ -1437,6 +1493,11 @@ function readVideoMultipartBody(req) {
         stream.resume();
         return;
       }
+      // 单个附件流异常时主动终止本次 multipart 解析，避免形成未处理流错误或请求永久挂起。
+      stream.on('error', error => {
+        failure ||= error;
+        reject(error);
+      });
       stream.on('data', chunk => {
         size += chunk.length;
         if (size <= maxBytes) {
@@ -1460,6 +1521,7 @@ function readVideoMultipartBody(req) {
     busboy.on('filesLimit', () => { failure ||= new Error('参考附件数量超过限制'); });
     busboy.on('error', reject);
     busboy.on('finish', () => failure ? reject(failure) : resolve({ fields, files }));
+    req.on('aborted', () => reject(createHttpError(400, 'REQUEST_ABORTED', '客户端在上传完成前断开连接')));
     req.pipe(busboy);
   });
 }
@@ -2485,8 +2547,11 @@ async function createUpstreamVideo(apiKey, request, files, signal, trace) {
     ...logOptions,
     isError: !response.ok || !upstreamTaskId,
   });
-  if (!response.ok || !upstreamTaskId) {
+  if (!response.ok) {
     throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '未返回任务 ID')}`);
+  }
+  if (!upstreamTaskId) {
+    throw new Error(`上游创建响应格式不兼容（HTTP ${response.status}）：${getVideoUpstreamErrorDetail(data, responseText, '未返回可识别的任务 ID')}`);
   }
   return upstreamTaskId;
 }
@@ -2519,7 +2584,7 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal, trace)
     const result = data ? normalizeVideoPollResult(request.protocol, data, baseUrl, upstreamTaskId) : null;
     logVideoUpstreamResponse('poll', url, response, responseText, context, {
       ...logOptions,
-      isError: !response.ok || !data || result?.state === 'failed',
+      isError: !response.ok || !data || result?.state === 'failed' || result?.state === 'invalid',
     });
     if (!response.ok || !data) {
       throw new Error(`${getUpstreamHttpErrorPrefix(response.status)}：${getVideoUpstreamErrorDetail(data, responseText, '轮询响应格式无效')}`);
@@ -2527,6 +2592,9 @@ async function pollUpstreamVideo(apiKey, request, upstreamTaskId, signal, trace)
     if (result.state === 'completed') return { remoteUrl: result.remoteUrl, authenticatedOrigin: new URL(baseUrl).origin };
     if (result.state === 'failed') {
       throw new Error(`上游视频任务失败：${getVideoUpstreamErrorDetail(data, responseText, '上游未返回失败原因')}`);
+    }
+    if (result.state === 'invalid') {
+      throw new Error(`上游轮询响应格式不兼容（HTTP ${response.status}）：${getVideoUpstreamErrorDetail(data, responseText, '任务已完成但未返回可用的视频地址')}`);
     }
     await waitForVideoPoll(intervalMs, signal);
   }
@@ -2583,7 +2651,17 @@ async function runVideoTask(taskId) {
     cleanupTaskRuntimeState(taskId);
     return;
   }
-  const request = JSON.parse(task.request_json);
+  const request = parseJsonSafely(task.request_json);
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    const completedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+    db.prepare("UPDATE tasks SET status = 'failed', error = ?, completed_at = ?, expires_at = ? WHERE id = ? AND status IN (?, ?)")
+      .run('任务请求数据损坏，无法执行', completedAt, expiresAt, taskId, TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED);
+    cleanupTaskRuntimeState(taskId);
+    broadcastTask(taskId);
+    broadcastQueueStatus();
+    return;
+  }
   const startedAtMs = Number.isFinite(Date.parse(task.created_at)) ? Date.parse(task.created_at) : Date.now();
   const trace = {
     taskId,
@@ -2693,10 +2771,15 @@ function drainVideoQueue() {
   while (videoQueue.length > 0 && activeVideoCount < maxConcurrency) {
     const taskId = videoQueue.shift();
     activeVideoCount += 1;
-    runVideoTask(taskId).finally(() => {
-      activeVideoCount -= 1;
-      drainVideoQueue();
-    });
+    runVideoTask(taskId)
+      .catch(error => {
+        // 执行器的意外异常不能形成未处理 Promise；任务状态由后续清理或下一轮启动恢复流程接管。
+        console.error(`[video-queue] 执行任务异常 taskId=${taskId}`, error?.message || error);
+      })
+      .finally(() => {
+        activeVideoCount -= 1;
+        drainVideoQueue();
+      });
   }
 }
 
@@ -2705,7 +2788,7 @@ function drainQueue() {
   while (queue.length > 0) {
     const taskId = queue[0];
     const task = db.prepare('SELECT request_json FROM tasks WHERE id = ?').get(taskId);
-    const req = task ? JSON.parse(task.request_json) : null;
+    const req = task ? parseJsonSafely(task.request_json) : null;
     const imageSlots = req?.parallelCount || 1;
 
     // 容量足够 → 放行。容量不足时唯一例外：当前空闲（activeCount===0）且该任务
@@ -2717,10 +2800,15 @@ function drainQueue() {
 
     queue.shift();
     activeCount += imageSlots;
-    runTask(taskId).finally(() => {
-      activeCount -= imageSlots;
-      drainQueue();
-    });
+    runTask(taskId)
+      .catch(error => {
+        // 执行器的意外异常不能形成未处理 Promise；释放并发槽位后继续处理后续任务。
+        console.error(`[queue] 执行任务异常 taskId=${taskId}`, error?.message || error);
+      })
+      .finally(() => {
+        activeCount -= imageSlots;
+        drainQueue();
+      });
   }
 }
 
@@ -2800,7 +2888,17 @@ async function runTask(taskId) {
     return;
   }
 
-  const request = JSON.parse(task.request_json);
+  const request = parseJsonSafely(task.request_json);
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    const completedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + TASK_TTL_MS).toISOString();
+    db.prepare("UPDATE tasks SET status = 'failed', error = ?, completed_at = ?, expires_at = ? WHERE id = ? AND status IN (?, ?)")
+      .run('任务请求数据损坏，无法执行', completedAt, expiresAt, taskId, TASK_STATUS.QUEUED, TASK_STATUS.LEGACY_QUEUED);
+    cleanupTaskRuntimeState(taskId);
+    broadcastTask(taskId);
+    broadcastQueueStatus();
+    return;
+  }
   const refImages = taskRefImages.get(taskId);
   if (refImages && refImages.length > 0) {
     request.images = refImages;
@@ -2862,7 +2960,8 @@ function serializeTask(task) {
   if (task.expires_at && Date.parse(task.expires_at) <= Date.now()) {
     return { id: task.id, status: 'expired', error: '该任务已超出取回时间' };
   }
-  const result = task.result_json ? JSON.parse(task.result_json) : undefined;
+  // 旧版本或异常中断可能留下损坏的结果 JSON；任务状态仍应可查询，不能让单条记录导致接口抛错。
+  const result = task.result_json ? parseJsonSafely(task.result_json) : undefined;
   const createdAtMs = Date.parse(task.created_at);
   const completedAtMs = task.completed_at ? Date.parse(task.completed_at) : Date.now();
   const durationMs = Number.isFinite(createdAtMs) && Number.isFinite(completedAtMs)
@@ -3048,7 +3147,7 @@ function handleClientMessage(ws, raw) {
 }
 
 function setupWebSocketServer() {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: WS_MAX_PAYLOAD_BYTES });
 
   wss.on('connection', ws => {
     wsAlive.set(ws, { lastPong: Date.now(), missed: 0 });
@@ -3462,12 +3561,13 @@ async function handleApi(req, res, pathname) {
 }
 
 initDatabase();
-ensureImageDir();
-ensureVideoDir();
-logBaseUrlRewriteConfiguration();
-cleanupExpiredTasks();
-setInterval(cleanupExpiredTasks, CLEANUP_INTERVAL_MS).unref();
-setInterval(cleanupRateLimitBuckets, CLEANUP_INTERVAL_MS).unref();
+const storageReady = ensureImageDir() && ensureVideoDir();
+if (storageReady) {
+  logBaseUrlRewriteConfiguration();
+  cleanupExpiredTasks();
+  setInterval(cleanupExpiredTasks, CLEANUP_INTERVAL_MS).unref();
+  setInterval(cleanupRateLimitBuckets, CLEANUP_INTERVAL_MS).unref();
+}
 
 /**
  * 处理 HTTP 服务监听失败，输出可直接执行的故障说明并正常结束进程。
@@ -3536,7 +3636,10 @@ const startServer = () => {
   });
 };
 
-if (IS_DEV) {
+if (!storageReady) {
+  // 文件系统错误已经写入日志队列；等待落盘完成后退出，避免丢失最关键的启动诊断。
+  void flushDailyFileLogs().finally(() => process.exit(1));
+} else if (IS_DEV) {
   app.prepare().then(startServer);
 } else {
   startServer();

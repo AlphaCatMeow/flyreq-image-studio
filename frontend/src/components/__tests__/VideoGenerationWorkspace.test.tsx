@@ -5,14 +5,16 @@ import { VideoGenerationWorkspace } from '@/components/VideoGenerationWorkspace'
 import { ImageGenerationWorkbench } from '@/components/ImageGenerationWorkbench';
 import { loadRegistry, saveRegistry } from '@/lib/flyreq-models';
 import { setPromptOptimizeEnabled } from '@/lib/settings-storage';
-import { restoreVideoBlobUrl } from '@/lib/video-job-store';
+import { cacheVideoReferenceFiles, restoreVideoBlobUrl, restoreVideoReferenceFiles } from '@/lib/video-job-store';
 import { applyVideoProtocolConfig, getVideoProtocolConfig } from '@/lib/video-config';
 
 vi.mock('@/lib/video-job-store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/video-job-store')>();
   return {
     ...actual,
+    cacheVideoReferenceFiles: vi.fn().mockResolvedValue(undefined),
     restoreVideoBlobUrl: vi.fn(actual.restoreVideoBlobUrl),
+    restoreVideoReferenceFiles: vi.fn().mockResolvedValue({ images: [], videos: [], audios: [] }),
   };
 });
 
@@ -35,7 +37,10 @@ describe('VideoGenerationWorkspace', () => {
     registry.textModels = [];
     registry.defaults.promptOptimize = '';
     saveRegistry(registry);
+    vi.mocked(cacheVideoReferenceFiles).mockClear();
     vi.mocked(restoreVideoBlobUrl).mockReset();
+    vi.mocked(restoreVideoReferenceFiles).mockReset();
+    vi.mocked(restoreVideoReferenceFiles).mockResolvedValue({ images: [], videos: [], audios: [] });
     Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:reference-image') });
     Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() });
   });
@@ -424,6 +429,125 @@ describe('VideoGenerationWorkspace', () => {
 
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('Shared main prompt\n\nUse a close-up shot'));
     expect(showToast).toHaveBeenCalledWith('Prompt copied', 'success');
+  });
+
+  it('使用当前参数重试时恢复全部参考素材并附加到新请求', async () => {
+    const image = new File(['image'], 'retry-image.png', { type: 'image/png' });
+    const video = new File(['video'], 'retry-video.mp4', { type: 'video/mp4' });
+    const audio = new File(['audio'], 'retry-audio.mp3', { type: 'audio/mpeg' });
+    localStorage.setItem('flyreq-video-jobs', JSON.stringify([{
+      id: 'video-retry-with-references',
+      serverTaskId: 'server-retry-with-references',
+      status: 'failed',
+      prompt: 'Retry with all references',
+      modelId: 'video-test',
+      resolution: 720,
+      videoSize: '1280x720',
+      aspectRatio: '16:9',
+      seconds: 4,
+      referenceStorageId: 'stored-video-references',
+      referenceImages: [{ name: image.name, type: image.type, size: image.size }],
+      referenceVideos: [{ name: video.name, type: video.type, size: video.size }],
+      referenceAudios: [{ name: audio.name, type: audio.type, size: audio.size }],
+      createdAt: '2026-08-07T08:00:00.000Z',
+    }]));
+    vi.mocked(restoreVideoReferenceFiles).mockResolvedValue({ images: [image], videos: [video], audios: [audio] });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: 'retried-video-task', status: 'queued' }),
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry with these settings' }));
+    expect(await screen.findByAltText(image.name)).toBeInTheDocument();
+    expect(screen.getByLabelText(video.name)).toBeInTheDocument();
+    expect(screen.getByLabelText(audio.name)).toBeInTheDocument();
+    fireEvent.click(screen.getByTitle('Generate video'));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const requestBody = fetchMock.mock.calls[0][1]?.body as FormData;
+    expect((requestBody.get('reference_images') as File).name).toBe(image.name);
+    expect((requestBody.get('reference_videos') as File).name).toBe(video.name);
+    expect((requestBody.get('reference_audios') as File).name).toBe(audio.name);
+  });
+
+  it('参考素材恢复完成前禁止提交和重复重试', async () => {
+    const image = new File(['image'], 'delayed-retry-image.png', { type: 'image/png' });
+    localStorage.setItem('flyreq-video-jobs', JSON.stringify([{
+      id: 'video-delayed-retry',
+      status: 'failed',
+      prompt: 'Delayed retry prompt',
+      modelId: 'video-test',
+      resolution: 720,
+      videoSize: '1280x720',
+      seconds: 4,
+      referenceStorageId: 'delayed-video-references',
+      referenceImages: [{ name: image.name, type: image.type, size: image.size }],
+      referenceVideos: [],
+      referenceAudios: [],
+      createdAt: '2026-08-08T08:00:00.000Z',
+    }]));
+    let resolveReferences: ((files: { images: File[]; videos: File[]; audios: File[] }) => void) | undefined;
+    vi.mocked(restoreVideoReferenceFiles).mockReturnValue(new Promise(resolve => { resolveReferences = resolve; }));
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={vi.fn()} />
+      </LanguageProvider>,
+    );
+
+    const promptInput = screen.getByPlaceholderText('Describe the scene, motion, camera, pacing, and sound you want…');
+    fireEvent.change(promptInput, { target: { value: 'Existing draft' } });
+    expect(screen.getByTitle('Generate video')).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry with these settings' }));
+    expect(screen.getByTitle('Generate video')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Retry with these settings' })).toBeDisabled();
+
+    await act(async () => { resolveReferences?.({ images: [image], videos: [], audios: [] }); });
+    expect(await screen.findByAltText(image.name)).toBeInTheDocument();
+    expect(screen.getByTitle('Generate video')).toBeEnabled();
+  });
+
+  it('参考素材不完整时保留当前草稿并提示错误', async () => {
+    localStorage.setItem('flyreq-video-jobs', JSON.stringify([{
+      id: 'video-incomplete-references',
+      status: 'failed',
+      prompt: 'Historical prompt',
+      modelId: 'video-test',
+      resolution: 720,
+      videoSize: '1280x720',
+      seconds: 4,
+      referenceStorageId: 'incomplete-video-references',
+      referenceImages: [{ name: 'missing.png', type: 'image/png', size: 10 }],
+      referenceVideos: [],
+      referenceAudios: [],
+      createdAt: '2026-08-08T08:00:00.000Z',
+    }]));
+    vi.mocked(restoreVideoReferenceFiles).mockRejectedValue(new Error('missing reference'));
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const showToast = vi.fn();
+
+    render(
+      <LanguageProvider initialLocale="en">
+        <VideoGenerationWorkspace onConfigureApiKey={vi.fn()} showToast={showToast} />
+      </LanguageProvider>,
+    );
+
+    const promptInput = screen.getByPlaceholderText('Describe the scene, motion, camera, pacing, and sound you want…');
+    fireEvent.change(promptInput, { target: { value: 'Current draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Retry with these settings' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('Could not restore all reference media. The current draft was kept unchanged.', 'error'));
+    expect(promptInput).toHaveValue('Current draft');
+    expect(screen.getByRole('button', { name: 'Retry with these settings' })).toBeEnabled();
+    expect(consoleError).toHaveBeenCalledWith('恢复视频参考素材失败', expect.any(Error));
   });
 
   it('releases a restored video URL when the workspace unmounts before restoration finishes', async () => {

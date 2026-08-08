@@ -74,6 +74,35 @@ describe('视频协议适配器', () => {
     expect(getVideoDownloadHeaders('https://cdn.example/video.mp4', 'http://internal-api:3000', 'secret')).toEqual({});
   });
 
+  it('创建响应按协议原生字段优先并兼容三种任务标识', () => {
+    expect(getCreatedVideoTaskId('openai', { request_id: 'request-openai' })).toBe('request-openai');
+    expect(getCreatedVideoTaskId('xai', { id: 'video-xai' })).toBe('video-xai');
+    expect(getCreatedVideoTaskId('new-api', { id: 'video-new-api' })).toBe('video-new-api');
+    expect(getCreatedVideoTaskId('legacy-openai-video', { task_id: 'task-legacy' })).toBe('task-legacy');
+    expect(getCreatedVideoTaskId('openai', { id: 'native-id', request_id: 'compatible-id' })).toBe('native-id');
+    expect(getCreatedVideoTaskId('xai', { request_id: 'native-id', id: 'compatible-id' })).toBe('native-id');
+    expect(getCreatedVideoTaskId('new-api', { task_id: 'native-id', id: 'compatible-id' })).toBe('native-id');
+    expect(getCreatedVideoTaskId('openai', { id: '   ' })).toBe('');
+  });
+
+  it('轮询响应跨协议兼容直接视频地址并统一识别失败状态', () => {
+    expect(normalizeVideoPollResult('openai', { video: { url: ' https://cdn.example/nested.mp4 ' } }, 'https://api.example', 'video-openai')).toEqual({
+      state: 'completed',
+      remoteUrl: 'https://cdn.example/nested.mp4',
+    });
+    expect(normalizeVideoPollResult('xai', { url: 'https://cdn.example/root.mp4' }, 'https://api.example', 'request-xai')).toEqual({
+      state: 'completed',
+      remoteUrl: 'https://cdn.example/root.mp4',
+    });
+    expect(normalizeVideoPollResult('new-api', { status: 'cancelled', url: 'https://cdn.example/stale.mp4' }, 'https://api.example', 'task-new')).toEqual({ state: 'failed' });
+    expect(normalizeVideoPollResult('openai', { status: 'expired' }, 'https://api.example', 'video-openai')).toEqual({ state: 'failed' });
+  });
+
+  it('非 OpenAI 完成态缺少视频地址时立即标记为格式无效', () => {
+    expect(normalizeVideoPollResult('xai', { status: 'completed' }, 'https://api.example', 'request-xai')).toEqual({ state: 'invalid' });
+    expect(normalizeVideoPollResult('new-api', { status: 'completed' }, 'https://api.example', 'task-new')).toEqual({ state: 'invalid' });
+  });
+
   it('将 2160 清晰度作为 4k 发送给 New API 和 OpenAI', () => {
     const request4k = { ...request, resolution: 2160 };
     const newApi = createVideoRequest('new-api', 'key', request4k, files);
