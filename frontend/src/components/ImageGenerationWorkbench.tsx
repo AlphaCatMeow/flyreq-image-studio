@@ -49,6 +49,7 @@ import type { AspectRatio, OutputSize, RefImageData } from '@/lib/job-store';
 import type { ImageFormSettings } from '@/lib/form-settings';
 import type { ImageToImageSubmitInput, TextToImageSubmitInput } from '@/lib/workspace-task-service';
 import { cn } from '@/lib/utils';
+import { normalizePastedFileName } from '@/lib/pasted-file-naming';
 
 const WORKBENCH_SETTINGS_KEY = LOCAL_STORAGE_KEYS.imageWorkbenchSettings;
 const T2I_SETTINGS_KEY = LOCAL_STORAGE_KEYS.textToImageSettings;
@@ -495,7 +496,7 @@ export function ImageGenerationWorkbench({
       for (const item of items) {
         if (item.type.startsWith('image/')) {
           const file = item.getAsFile();
-          if (file) imageFiles.push(file);
+          if (file) imageFiles.push(normalizePastedFileName(file, pendingFiles.length + imageFiles.length));
         }
       }
       if (imageFiles.length > 0) {
@@ -505,7 +506,7 @@ export function ImageGenerationWorkbench({
     };
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
-  }, [loading, processFiles]);
+  }, [loading, pendingFiles.length, processFiles]);
 
   const handleRemovePending = useCallback((id: string) => {
     setPendingFiles(prev => prev.filter(f => f.id !== id));

@@ -117,7 +117,7 @@ function readReferenceImage(node: CanvasNodeData): ReferenceImage | null {
   if (node.type !== CanvasNodeType.Image || (!node.metadata?.content && !node.metadata?.storageKey)) return null;
   return {
     id: node.id,
-    name: `${node.title || node.id}.png`,
+    name: /\.[a-z0-9]+$/i.test(node.title || '') ? node.title : `${node.title || node.id}.png`,
     type: node.metadata.mimeType || "image/png",
     dataUrl: node.metadata.content || "",
     storageKey: node.metadata.storageKey,

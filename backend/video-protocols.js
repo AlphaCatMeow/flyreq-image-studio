@@ -77,7 +77,7 @@ function createVideoRequest(protocol, apiKey, request, files) {
     if (request.size !== 'auto') body.append('size', request.size);
     body.append('resolution', formatVideoResolution(request.resolution));
     if (image) body.append('input_reference', new Blob([image.buffer], { type: image.mimeType }), image.filename);
-    appendMediaFiles(body, 'reference_images', images);
+    appendMediaFiles(body, 'reference_images', images.slice(1));
     appendMediaFiles(body, 'reference_videos', videos);
     appendMediaFiles(body, 'reference_audios', audios);
     return { path: '/v1/videos', init: { method: 'POST', headers: authorization, body } };

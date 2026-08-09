@@ -33,6 +33,7 @@ import { fitNodeSize } from "./utils/canvas-node-size";
 import { getImageBlob, imageToDataUrl, resolveImageUrl, uploadImage, type UploadedImage } from "./lib/image-storage";
 import { imageReferenceLabel } from "./lib/image-reference-prompt";
 import { compressReferenceDataUrl, readFileAsDataUrl } from "./lib/image-utils";
+import { normalizePastedFileName } from "@/lib/pasted-file-naming";
 import { CanvasNodeType, type CanvasConnection, type CanvasGenerationConfig, type CanvasNodeData, type CanvasNodeMetadata, type ContextMenuState, type ConnectionHandle, type Position, type SelectionBox, type ViewportTransform } from "./types";
 import type { ReferenceImage } from "./types-media";
 import { PromptOptimizeDialog } from "@/components/PromptOptimizeDialog";
@@ -219,7 +220,7 @@ export function CanvasEditor({ projectId, onBack, onRequireApiKey, showToast, sh
   const [viewportSize, setViewportSize] = useState({ width: 1280, height: 720 });
   const [miniMapOpen, setMiniMapOpen] = useState(false);
   const [titleDraft, setTitleDraft] = useState<string | null>(null);
-  const [replaceConfirm, setReplaceConfirm] = useState<{ nodeId: string; stored: UploadedImage } | null>(null);
+  const [replaceConfirm, setReplaceConfirm] = useState<{ nodeId: string; stored: UploadedImage; title?: string } | null>(null);
   const [textReplaceConfirm, setTextReplaceConfirm] = useState<{ nodeId: string; content: string } | null>(null);
   const [fullscreenImageUrl, setFullscreenImageUrl] = useState<{ src: string; title: string; actionPayload?: ImageActionPayload } | null>(null);
   const [nodeZIndexMap, setNodeZIndexMap] = useState<Record<string, number>>({});
@@ -423,23 +424,23 @@ export function CanvasEditor({ projectId, onBack, onRequireApiKey, showToast, sh
 
   // ---- image source: upload / asset library / save to assets ----
   const fillNodeWithStored = useCallback(
-    (nodeId: string, stored: UploadedImage) => {
+    (nodeId: string, stored: UploadedImage, title?: string) => {
       pushHistory();
       const size = fitNodeSize(stored.width, stored.height, 360, 360);
-      patchNode(nodeId, (node) => ({ ...node, width: size.width, height: size.height, metadata: { ...node.metadata, ...storedToMetadata(stored) } }));
+      patchNode(nodeId, (node) => ({ ...node, ...(title ? { title } : {}), width: size.width, height: size.height, metadata: { ...node.metadata, ...storedToMetadata(stored) } }));
     },
     [patchNode, pushHistory],
   );
 
   // 填充前若已有图片，先弹「是否替换」确认。
   const fillNodeWithConfirm = useCallback(
-    (nodeId: string, stored: UploadedImage) => {
+    (nodeId: string, stored: UploadedImage, title?: string) => {
       const node = nodes.find((item) => item.id === nodeId);
       if (node?.metadata?.content) {
-        setReplaceConfirm({ nodeId, stored });
+        setReplaceConfirm({ nodeId, stored, title });
         return;
       }
-      fillNodeWithStored(nodeId, stored);
+      fillNodeWithStored(nodeId, stored, title);
     },
     [fillNodeWithStored, nodes],
   );
@@ -1196,19 +1197,20 @@ export function CanvasEditor({ projectId, onBack, onRequireApiKey, showToast, sh
       }
       if (!imageFile) return;
       event.preventDefault();
-      const file = imageFile;
+      const pastedImageCount = nodes.filter(node => node.type === CanvasNodeType.Image && Boolean(node.metadata?.content)).length;
+      const file = normalizePastedFileName(imageFile, pastedImageCount);
       const selectedImageNodes = nodes.filter((node) => node.type === CanvasNodeType.Image && selectedIds.includes(node.id));
       void (async () => {
         try {
           const dataUrl = await readFileAsDataUrl(file);
           const stored = await uploadImage(dataUrl);
           if (selectedImageNodes.length === 1) {
-            fillNodeWithConfirm(selectedImageNodes[0].id, stored);
+            fillNodeWithConfirm(selectedImageNodes[0].id, stored, file.name);
             return;
           }
           pushHistory();
           const size = fitNodeSize(stored.width, stored.height, 320, 320);
-          const node = createImageNode(viewportCenterWorld(), { metadata: storedToMetadata(stored), width: size.width, height: size.height });
+          const node = createImageNode(viewportCenterWorld(), { title: file.name, metadata: storedToMetadata(stored), width: size.width, height: size.height });
           setNodes((prev) => [...prev, node]);
           setSelectedIds([node.id]);
         } catch {
@@ -1820,7 +1822,7 @@ export function CanvasEditor({ projectId, onBack, onRequireApiKey, showToast, sh
             </Button>
             <Button
               onClick={() => {
-                if (replaceConfirm) fillNodeWithStored(replaceConfirm.nodeId, replaceConfirm.stored);
+                if (replaceConfirm) fillNodeWithStored(replaceConfirm.nodeId, replaceConfirm.stored, replaceConfirm.title);
                 setReplaceConfirm(null);
               }}
             >

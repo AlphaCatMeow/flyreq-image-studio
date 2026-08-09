@@ -27,6 +27,7 @@ import {
   PopoverTrigger,
 } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import { normalizePastedFileName } from '@/lib/pasted-file-naming';
 import { getDefaultModelId, MODEL_OPTIONS, MODEL_IMAGE_LIMITS, type ModelId } from '@/lib/gemini-config';
 import { updateRegistryDefaults } from '@/lib/flyreq-models';
 import {
@@ -611,7 +612,7 @@ export function ImageToImageForm({
       for (const item of items) {
         if (item.type.startsWith('image/')) {
           const file = item.getAsFile();
-          if (file) imageFiles.push(file);
+          if (file) imageFiles.push(normalizePastedFileName(file, pendingFiles.length + imageFiles.length));
         }
       }
       if (imageFiles.length > 0) {
@@ -621,7 +622,7 @@ export function ImageToImageForm({
     };
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
-  }, [disabled, loading, processFiles]);
+  }, [disabled, loading, pendingFiles.length, processFiles]);
 
   const canSubmit = prompt.trim().length > 0 && pendingFiles.length > 0 && !disabled && !loading;
 
