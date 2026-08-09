@@ -12,6 +12,7 @@ import type { ImageActionPayload } from '@/lib/image-actions';
 interface AttachmentChip {
   id: string;
   name: string;
+  file?: File;
   preview?: string;
   dataUrl?: string;
   mimeType?: string;
@@ -53,6 +54,7 @@ export function AttachmentChips({
     .map<ImageActionPayload>(file => ({
       id: file.id,
       name: file.name,
+      file: file.file,
       dataUrl: file.dataUrl || file.preview,
       src: file.preview,
       mimeType: file.mimeType,
@@ -100,6 +102,7 @@ export function AttachmentChips({
                 payload={{
                   id: file.id,
                   name: file.name,
+                  file: file.file,
                   dataUrl: file.dataUrl || file.preview,
                   src: file.preview,
                   mimeType: file.mimeType,

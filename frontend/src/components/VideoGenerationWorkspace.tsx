@@ -34,6 +34,7 @@ import { requireDefaultConfiguredTextModel } from '@/lib/model-endpoints';
 import { streamPromptOptimize, type StreamPromptOptimizeHandle } from '@/lib/prompt-optimize-client';
 import { getAssetBlob, type ImageAsset } from '@/lib/asset-store';
 import { cn } from '@/lib/utils';
+import { normalizePastedFileName } from '@/lib/pasted-file-naming';
 import { MAX_PARALLEL_COUNT, PARALLEL_COUNT_OPTIONS, type ParallelCount } from '@/lib/model-capabilities';
 import { composeEffectiveVideoPrompt } from '@/lib/video-prompt-variants';
 
@@ -218,12 +219,12 @@ function MediaAttachmentTile({ file, onRemove }: MediaAttachmentTileProps) {
  * @returns 复用生图工作台能力的图片缩略图、预览、复制及素材库操作区域。
  */
 function VideoReferenceImageChips({ files, onRemove, prompt }: VideoReferenceImageChipsProps) {
-  const [attachmentFiles, setAttachmentFiles] = useState<Array<{ id: string; name: string; preview: string; dataUrl: string; mimeType: string }>>([]);
+  const [attachmentFiles, setAttachmentFiles] = useState<Array<{ id: string; name: string; file: File; preview: string; dataUrl: string; mimeType: string }>>([]);
 
   useEffect(() => {
     const nextFiles = files.map(file => {
       const preview = URL.createObjectURL(file);
-      return { id: `${file.name}-${file.lastModified}`, name: file.name, preview, dataUrl: preview, mimeType: file.type };
+      return { id: `${file.name}-${file.lastModified}`, name: file.name, file, preview, dataUrl: preview, mimeType: file.type };
     });
     let cancelled = false;
     queueMicrotask(() => {
@@ -640,11 +641,19 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
         .filter((file): file is File => Boolean(file));
       if (mediaFiles.length === 0) return;
       event.preventDefault();
-      addReferenceFiles(mediaFiles);
+      let imageIndex = referenceImages.length;
+      let videoIndex = referenceVideos.length;
+      let audioIndex = referenceAudios.length;
+      const namedMediaFiles = mediaFiles.map(file => {
+        if (file.type.startsWith('image/')) return normalizePastedFileName(file, imageIndex++);
+        if (file.type.startsWith('video/')) return normalizePastedFileName(file, videoIndex++);
+        return normalizePastedFileName(file, audioIndex++);
+      });
+      addReferenceFiles(namedMediaFiles);
     };
     document.addEventListener('paste', handlePaste);
     return () => document.removeEventListener('paste', handlePaste);
-  }, [addReferenceFiles]);
+  }, [addReferenceFiles, referenceAudios.length, referenceImages.length, referenceVideos.length]);
 
   /**
    * 将素材库图片转换为参考图文件并追加到上传列表。
@@ -1053,6 +1062,12 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
     && activeReferenceVideosValid
     && activeReferenceAudiosValid
   );
+  const isGrokVideoModel = Boolean(
+    selectedModel
+    && (selectedModel.protocol === 'xai' || getResolvedVideoModelId(selectedModel).toLowerCase().startsWith('grok-imagine-video'))
+  );
+  const grokReferenceAspectRatio = activeVideoSize !== 'auto' ? getVideoSizeAspectRatio(activeVideoSize) : activeAspectRatio;
+  const hasReferenceMedia = referenceImages.length + referenceVideos.length + referenceAudios.length > 0;
 
   return (
     <div ref={workspaceRef} className={cn('grid min-h-0 gap-5', wideMode && 'xl:h-full xl:grid-cols-[minmax(460px,0.95fr)_minmax(0,1.35fr)]')}>
@@ -1107,6 +1122,12 @@ export function VideoGenerationWorkspace({ wideMode = false, onConfigureApiKey, 
                 </div>
               )}
               <Textarea value={prompt} onChange={event => setPrompt(event.target.value)} onKeyDown={handlePromptKeyDown} placeholder={t('video.promptPlaceholder')} rows={3} className="min-h-24 resize-none rounded-none border-0 bg-transparent px-3 pt-3 placeholder:text-placeholder focus-visible:border-0 focus-visible:ring-0 sm:px-4 sm:pt-4" />
+              {isGrokVideoModel && hasReferenceMedia && grokReferenceAspectRatio && (
+                <div className="mx-3 flex items-start gap-2 rounded-md border border-amber-300/60 bg-amber-50/70 px-2.5 py-2 text-left text-[11px] leading-relaxed text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/30 dark:text-amber-100 sm:mx-4">
+                  <Info className="mt-0.5 size-3.5 shrink-0" />
+                  <span>{t('video.grokReferenceAspectNotice', { ratio: grokReferenceAspectRatio })}</span>
+                </div>
+              )}
               <div className="space-y-2 px-3 pb-2 pt-2 sm:px-4">
                 <div className="flex items-center gap-1.5">
                   <Sparkles className="size-3.5 shrink-0 text-muted-foreground" />

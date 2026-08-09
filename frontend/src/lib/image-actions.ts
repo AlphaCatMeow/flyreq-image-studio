@@ -100,13 +100,13 @@ function canvasToPngBlob(canvas: HTMLCanvasElement): Promise<Blob | null> {
   return new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
 }
 
+/**
+ * 将任意图片二进制重新编码为浏览器剪贴板可解码的 PNG 数据。
+ * @param blob 待复制的原始图片二进制。
+ * @returns 标准 PNG 图片二进制。
+ */
 async function getClipboardImageBlob(blob: Blob): Promise<Blob> {
   const mimeType = blob.type || 'image/png';
-  const clipboardItem = ClipboardItem as unknown as { supports?: (type: string) => boolean };
-  const supportsType = typeof clipboardItem.supports === 'function'
-    ? clipboardItem.supports(mimeType)
-    : mimeType === 'image/png';
-  if (supportsType) return blob;
   if (!mimeType.startsWith('image/')) {
     throw new Error('当前文件不是可复制的图片格式');
   }

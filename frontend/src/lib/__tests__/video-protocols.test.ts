@@ -58,7 +58,7 @@ describe('视频协议适配器', () => {
     expect(upstream.init.body.get('model')).toBe('video-model');
     expect(upstream.init.body.get('input_reference')).toBeInstanceOf(Blob);
     expect(upstream.init.body.get('resolution')).toBe('720p');
-    expect(upstream.init.body.getAll('reference_images')).toHaveLength(1);
+    expect(upstream.init.body.has('reference_images')).toBe(false);
     expect(upstream.init.body.getAll('reference_videos')).toHaveLength(1);
     expect(upstream.init.body.getAll('reference_audios')).toHaveLength(1);
     expect(getCreatedVideoTaskId('openai', { id: 'video-openai' })).toBe('video-openai');
@@ -72,6 +72,18 @@ describe('视频协议适配器', () => {
     });
     expect(getVideoDownloadHeaders('http://internal-api:3000/v1/videos/video-openai/content', 'http://internal-api:3000', 'secret')).toEqual({ Authorization: 'Bearer secret' });
     expect(getVideoDownloadHeaders('https://cdn.example/video.mp4', 'http://internal-api:3000', 'secret')).toEqual({});
+  });
+
+  it('构造 OpenAI 多参考图请求时不会重复发送首张图片', () => {
+    const multipleImages = [
+      files.images[0],
+      { filename: 'reference-2.png', mimeType: 'image/png', buffer: Buffer.from('image-2') },
+      { filename: 'reference-3.png', mimeType: 'image/png', buffer: Buffer.from('image-3') },
+    ];
+    const upstream = createVideoRequest('openai', 'key', request, { ...files, images: multipleImages });
+
+    expect(upstream.init.body.getAll('input_reference')).toHaveLength(1);
+    expect(upstream.init.body.getAll('reference_images')).toHaveLength(2);
   });
 
   it('创建响应按协议原生字段优先并兼容三种任务标识', () => {
